@@ -1,0 +1,23 @@
+[project]
+name = "tapan_ai"
+version = "0.1.0"
+description = "TAPAN_AI - Personal AI Assistant"
+requires-python = ">=3.9"
+
+[tool.pyre]
+source_directories = ["."]
+search_path = ["."]
+exclude = [
+    ".git",
+    "__pycache__",
+    "backup",
+    "experiments",
+    "bitnet"
+]
+
+[tool.pyright]
+include = ["src"]
+pythonVersion = "3.9"
+typeCheckingMode = "basic"
+extraPaths = ["."]
+
