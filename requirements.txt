@@ -1,0 +1,12 @@
+# Core dependencies
+python-dateutil
+python-dateparser
+pydantic
+rich
+pytest
+schedule
+
+# Optional: Cognee + Neo4j (for semantic/graph memory)
+# Uncomment if using CogneeTool features:
+# cognee
+# neo4j

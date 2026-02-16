@@ -1,0 +1,44 @@
+# Python caches and artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# Virtual environments
+venv/
+.venv/
+
+# Environment and secrets
+.env
+
+# IDE
+.vscode/
+.idea/
+.pyrightconfig.json
+
+# Databases & Data
+*.db
+*.sqlite
+data/
+backup/
+exports/
+_cleanup_backup/
+_archived/
+
+# Cognee & vector caches
+cognee_cache/
+chats/
+vault/
+
+# Logs & exports
+*.log
+*.csv
+*.jsonl
+
+# Temp test dirs
+tests/temp*/
+
+# Large/misc files
+*.zip
+*.pdf
+bitnet/
