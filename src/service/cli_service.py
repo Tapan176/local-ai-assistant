@@ -11,9 +11,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 def main():
   """Start the TAPAN_AI CLI"""
-  from src.cli.app import TapanAI
-  app = TapanAI()
-  app.run()
+  from src.cli.app import main as app_main
+  app_main()
 
 
 def run_tests():

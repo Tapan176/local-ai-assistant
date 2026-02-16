@@ -54,7 +54,8 @@ class FinanceTool(BaseTool):
     return [
       "accounts", "add_account", "delete_account", "rename_account",
       "expense", "income", "transfer", "balance", 
-      "reset_all_balances", "bulk_delete", "update_account_balance"
+      "reset_all_balances", "bulk_delete", "update_account_balance",
+      "get_account", "history", "categories"
     ]
 
   def execute(self, action: str, params: Dict[str, Any]) -> ToolResult:
@@ -80,6 +81,12 @@ class FinanceTool(BaseTool):
         return self.bulk_delete(params)
       if action == "update_account_balance":
         return self.update_balance(params)
+      if action == "get_account":
+        return self.get_account(params)
+      if action == "history":
+        return self.get_history(params)
+      if action == "categories":
+        return self.get_categories(params)
 
       return ToolResult(False, f"Unknown action: {action}")
     except Exception as e:
@@ -108,8 +115,10 @@ class FinanceTool(BaseTool):
     if existing:
       return ToolResult(False, f"Account '{name}' already exists.")
 
-    initial = float(params.get("opening_balance", 0))
-    self.accounts.create({"name": name, "balance": initial})
+    initial = float(params.get("opening_balance") or params.get("balance", 0))
+    atype = params.get("type", "asset")
+    note = params.get("note", "")
+    self.accounts.create({"name": name, "balance": initial, "type": atype, "note": note})
     return ToolResult(True, f"✓ Account created: {name} ({initial:g})")
 
   def delete_account(self, params: Dict) -> ToolResult:
@@ -123,6 +132,17 @@ class FinanceTool(BaseTool):
 
     self.accounts.delete(accts[0]['id'])
     return ToolResult(True, f"✓ Deleted account: {name}")
+
+  def get_account(self, params: Dict) -> ToolResult:
+    name = params.get("name")
+    if not name: return ToolResult(False, "Name required")
+    
+    accts = self.accounts.list({"name": name})
+    if not accts: return ToolResult(False, f"Account '{name}' not found.")
+    
+    a = accts[0]
+    info = f"Account: {a['name']}\nBalance: {a['balance']:g}\nType: {a.get('type', 'asset')}\nNote: {a.get('note', '')}"
+    return ToolResult(True, info)
 
   def rename_account(self, params: Dict) -> ToolResult:
     old = params.get("old_name")
@@ -168,28 +188,28 @@ class FinanceTool(BaseTool):
     return ToolResult(True, f"✓ {type_.title()}: {amount:g} ({category}) in {acct_name}")
 
   def transfer(self, params: Dict) -> ToolResult:
-    src = params.get("from_account")
-    dst = params.get("to_account")
-    amt = float(params.get("amount", 0))
+    source_name = params.get("from_account")
+    dest_name = params.get("to_account")
+    amount = float(params.get("amount", 0))
 
-    if not src or not dst: return ToolResult(False, "Source and Dest required.")
-    if amt <= 0: return ToolResult(False, "Positive amount required.")
+    if not source_name or not dest_name: return ToolResult(False, "Source and Dest required.")
+    if amount <= 0: return ToolResult(False, "Positive amount required.")
 
-    s_acct = self.accounts.list({"name": src})
-    d_acct = self.accounts.list({"name": dst})
+    source_accounts = self.accounts.list({"name": source_name})
+    dest_accounts = self.accounts.list({"name": dest_name})
 
-    if not s_acct or not d_acct: return ToolResult(False, "Accounts not found.")
+    if not source_accounts or not dest_accounts: return ToolResult(False, "Accounts not found.")
 
     # update balances
-    self.accounts.update(s_acct[0]['id'], {"balance": s_acct[0]['balance'] - amt})
-    self.accounts.update(d_acct[0]['id'], {"balance": d_acct[0]['balance'] + amt})
+    self.accounts.update(source_accounts[0]['id'], {"balance": source_accounts[0]['balance'] - amount})
+    self.accounts.update(dest_accounts[0]['id'], {"balance": dest_accounts[0]['balance'] + amount})
 
     self.transactions.create({
-      "amount": amt, "type": "transfer", "category": "transfer",
-      "account": src, "note": f"to {dst}"
+      "amount": amount, "type": "transfer", "category": "transfer",
+      "account": source_name, "note": f"to {dest_name}"
     })
 
-    return ToolResult(True, f"✓ Transferred {amt:g} {src}->{dst}")
+    return ToolResult(True, f"✓ Transferred {amount:g} {source_name}->{dest_name}")
 
   def reset_all(self) -> ToolResult:
     self.accounts.update_by_text("", {"balance": 0}, "name") # Hacky match all?
@@ -217,4 +237,27 @@ class FinanceTool(BaseTool):
     accts = self.accounts.list({"name": name})
     if not accts: return ToolResult(False, "Account not found.")
     self.accounts.update(accts[0]['id'], {"balance": amt})
+    self.accounts.update(accts[0]['id'], {"balance": amt})
     return ToolResult(True, f"✓ Set {name} to {amt:g}")
+
+  def get_history(self, params: Dict) -> ToolResult:
+    # return transactions
+    limit = int(params.get("limit", 10))
+    txs = self.transactions.list(limit=limit) # BaseRepo list defaults order by id desc?
+    # BaseRepo.list currently doesn't support order_by param in list() kwargs?
+    # Let's check BaseRepository or just list all and slice.
+    # transactions table has date.
+    
+    if not txs: return ToolResult(True, "No transactions.")
+    
+    lines = ["Transaction History:"]
+    for t in txs:
+      lines.append(f"- {t['date'][:16]} | {t['type'].upper()} {t['amount']} | {t['category']} | {t.get('note', '')}")
+    return ToolResult(True, "\n".join(lines))
+
+  def get_categories(self, params: Dict) -> ToolResult:
+    # naive implementation: list all distinct categories
+    # BaseRepo doesn't have distinct. list all and set.
+    txs = self.transactions.list(limit=1000)
+    cats = sorted(list(set(t['category'] for t in txs)))
+    return ToolResult(True, ", ".join(cats))

@@ -33,7 +33,7 @@ class ReminderTool(BaseTool):
 
   @property
   def actions(self) -> list:
-    return ["add", "list", "delete", "delete_by_text", "update", "mark_done"]
+    return ["add", "list", "delete", "delete_by_text", "delete_by_id", "update", "mark_done"]
 
   def execute(self, action: str, params: Dict[str, Any]) -> ToolResult:
     try:
@@ -43,6 +43,8 @@ class ReminderTool(BaseTool):
         return self.list_reminders(params)
       if action == "delete" or action == "delete_by_text":
         return self.delete_by_text(params)
+      if action == "delete_by_id":
+        return self.delete_by_id(params)
       if action == "update":
         return self.update(params)
       if action == "mark_done":
@@ -51,6 +53,14 @@ class ReminderTool(BaseTool):
       return ToolResult(False, f"Unknown action: {action}")
     except Exception as e:
       return ToolResult(False, f"Error: {str(e)}")
+
+  def delete_by_id(self, params: Dict) -> ToolResult:
+    id_ = params.get("id")
+    if not id_: return ToolResult(False, "ID required.")
+    success = self.repo.delete(id_)
+    if success:
+      return ToolResult(True, f"Deleted reminder {id_}.")
+    return ToolResult(False, f"Reminder {id_} not found.")
 
   def add(self, params: Dict) -> ToolResult:
     text = params.get("text")
@@ -80,10 +90,22 @@ class ReminderTool(BaseTool):
     return ToolResult(True, f"Deleted {count} reminders.")
 
   def update(self, params: Dict) -> ToolResult:
-    search = params.get("search_text")
+    item_id = params.get("id")
     new_text = params.get("new_text")
-    if not search: return ToolResult(False, "Search text required.")
+    
+    if item_id:
+      updates = {}
+      if new_text: updates["text"] = new_text
+      if "due_date" in params: updates["due_date"] = params["due_date"]
+      if "priority" in params: updates["priority"] = params["priority"]
+      
+      if self.repo.update(item_id, updates):
+        return ToolResult(True, f"Updated reminder {item_id}.")
+      return ToolResult(False, f"Reminder {item_id} not found.")
 
+    search = params.get("search_text")
+    if not search: return ToolResult(False, "Search text required.")
+    
     count = self.repo.update_by_text(search, {"text": new_text})
     return ToolResult(True, f"Updated {count} reminders.")
 

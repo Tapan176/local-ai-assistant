@@ -20,7 +20,19 @@ def main():
 
   try:
     orchestrator = Orchestrator(data_dir=data_dir)
-    orchestrator.run_cli_loop()
+    
+    # Phase 18: Use BackgroundService Event Loop
+    from src.service.background_service import BackgroundService
+    
+    def cli_input_provider():
+      try:
+        return input("")
+      except (EOFError, KeyboardInterrupt):
+        raise EOFError
+        
+    print("✨ Jarvis Event Loop Active (Type 'help' for commands)")
+    service = BackgroundService(orchestrator, cli_input_provider)
+    service.start()
   except Exception as e:
     print(f"Critical Error: {e}")
     sys.exit(1)

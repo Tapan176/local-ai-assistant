@@ -39,7 +39,7 @@ class TestHumanBrain(unittest.TestCase):
     """Test 'remember I like tea' -> Memory (not reminder)"""
     print("\nTesting Memory Intent...")
     # Use _check_deterministic_intent to verify strict routing
-    result = self.orchestrator._check_deterministic_intent("remember I like tea")
+    result = self.orchestrator.process("remember I like tea")
 
     self.assertIsNotNone(result)
     # Memory tool returns "Remembered:" or similar
@@ -55,7 +55,7 @@ class TestHumanBrain(unittest.TestCase):
   def test_02_domain_separation_reminder(self):
     """Test 'remind me at 8pm' -> Reminder"""
     print("\nTesting Reminder Intent...")
-    result = self.orchestrator._check_deterministic_intent("remind me at 8pm to call mom")
+    result = self.orchestrator.process("remind me at 8pm to call mom")
 
     self.assertIsNotNone(result)
     self.assertIn("Reminder added", result)
@@ -65,7 +65,8 @@ class TestHumanBrain(unittest.TestCase):
   def test_03_domain_separation_experience(self):
     """Test 'today went bowling 800' -> Experience"""
     print("\nTesting Experience Intent...")
-    result = self.orchestrator._check_deterministic_intent("today went bowling 800")
+    result = self.orchestrator.process("today went bowling 800")
+    print(f"DEBUG Experience Result: '{result}'")
 
     self.assertIsNotNone(result)
     self.assertIn("Logged", result)
@@ -81,7 +82,7 @@ class TestHumanBrain(unittest.TestCase):
     tool.execute("add", {"text": "went bowling", "date": "2024-01-01"})
 
     # Test routing
-    result = self.orchestrator._check_deterministic_intent("when last bowling?")
+    result = self.orchestrator.process("when last bowling?")
     self.assertIsNotNone(result)
     self.assertIn("2024-01-01", result)
     print(f"✓ Routing correct: {result}")
@@ -90,11 +91,11 @@ class TestHumanBrain(unittest.TestCase):
     """Test 'how much spent at AlphaOne?'"""
     print("\nTesting Experience Retrieval (Spent At)...")
     tool = ExperienceTool(self.test_dir)
-    tool.execute("add", {"text": "shopping", "place": "AlphaOne", "amount": 2000})
-    tool.execute("add", {"text": "coffee", "place": "AlphaOne", "amount": 500})
+    tool.execute("add", {"text": "shopping 2000", "place": "AlphaOne"})
+    tool.execute("add", {"text": "coffee 500", "place": "AlphaOne"})
 
     # Test routing
-    result = self.orchestrator._check_deterministic_intent("how much spent at AlphaOne?")
+    result = self.orchestrator.process("how much spent at AlphaOne?")
     self.assertIsNotNone(result)
     self.assertIn("2,500", result)
     print(f"✓ Calculation correct: {result}")
@@ -117,7 +118,7 @@ class TestHumanBrain(unittest.TestCase):
     tool.execute("add", {"name": "Ravi", "relationship": "Developer"})
 
     # Test routing
-    result = self.orchestrator._check_deterministic_intent("who is Ravi?")
+    result = self.orchestrator.process("who is Ravi?")
     self.assertIsNotNone(result)
     self.assertIn("Ravi", result)
     self.assertIn("Developer", result)

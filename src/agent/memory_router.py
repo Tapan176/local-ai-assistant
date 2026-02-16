@@ -44,8 +44,25 @@ class MemoryRouter:
     self.cognee = cognee_tool
 
   def route(self, action: str, params: Dict[str, Any]) -> ToolResult:
-    """Route action to the appropriate backend."""
-    # Explicit Cognee actions
+    """
+    Route action to the appropriate backend with Dual-Write strategy.
+    """
+    # 1. WRITE: Dual write to ensure data consistency
+    if action == "remember":
+        # Always write to SQLite (Primary)
+        sqlite_res = self.sqlite.execute(action, params)
+        
+        # Best-effort write to Cognee
+        if self.cognee and sqlite_res.success:
+            try:
+                self.cognee.execute("remember", params)
+                # Let's inspect CogneeTool if needed, but 'remember' is standard.
+                pass
+            except Exception:
+                pass # Don't fail if semantic memory is down
+        return sqlite_res
+
+    # 2. READ: Explicit Cognee actions or smart search
     if action in self.COGNEE_ACTIONS:
       if self.cognee is not None:
         result = self.cognee.execute(action, params)
@@ -56,7 +73,7 @@ class MemoryRouter:
       else:
         return self._sqlite_search_fallback(params)
 
-    # Everything else → SQLite
+    # Everything else → SQLite (list, delete, etc)
     return self.sqlite.execute(action, params)
 
   def _sqlite_search_fallback(self, params: Dict) -> ToolResult:

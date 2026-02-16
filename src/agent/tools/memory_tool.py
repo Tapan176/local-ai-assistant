@@ -65,6 +65,16 @@ class MemoryTool(BaseTool):
       "category": params.get("category", "fact"),
       "tags": params.get("tags", "")
     })
+
+    # Auto-index into KnowledgeManager for RAG (non-fatal)
+    try:
+      from src.core.knowledge import KnowledgeManager
+      kb_path = self.data_dir / "knowledge.db"
+      km = KnowledgeManager(kb_path, self.data_dir)
+      km.ingest_from_memory([(text, "")])
+    except Exception:
+      pass  # SQLite save succeeded, indexing failure is non-critical
+
     return ToolResult(True, f"✓ Remembered: {text}")
 
   def list_memories(self) -> ToolResult:

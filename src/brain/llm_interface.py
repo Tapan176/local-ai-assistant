@@ -12,7 +12,7 @@ class LLMInterface(ABC):
   """Abstract base class for LLM implementations"""
 
   @abstractmethod
-  def generate(self, prompt: str, context: str = "") -> str:
+  def generate(self, prompt: str, context: str = "", **kwargs) -> str:
     """Generate text from prompt
 
     Args:
@@ -71,7 +71,7 @@ class PlaceholderLLM(LLMInterface):
     self.name = "PlaceholderLLM"
     self.ready = True
 
-  def generate(self, prompt: str, context: str = "") -> str:
+  def generate(self, prompt: str, context: str = "", **kwargs) -> str:
     """Basic response generation without actual LLM
 
     Returns helpful message about LLM not being configured.
@@ -170,7 +170,7 @@ class OllamaLLM(LLMInterface):
     except Exception:
       self.ready = False
 
-  def generate(self, prompt: str, context: str = "") -> str:
+  def generate(self, prompt: str, context: str = "", **kwargs) -> str:
     """Generate response using Ollama"""
     if not self.ready:
       return "Ollama not available. Run 'ollama serve' first."
@@ -305,19 +305,18 @@ class UnifiedLLM(LLMInterface):
     except ImportError:
       self.ollama = None
 
-  def generate(self, prompt: str, context: str = "") -> str:
+  def generate(self, prompt: str, context: str = "", **kwargs) -> str:
     """Generate response using appropriate backend"""
     from src.brain.router import TaskType
 
     task = self.router.infer_task_type(prompt)
     decision = self.router.route(task, {'text_length': len(context) if context else 0})
 
-    # Use Ollama if available and decision points to it
     if decision.backend_name in ['ollama', 'ollama_heavy'] and self.ollama and self.ollama.is_ready():
-      return self.ollama.generate(prompt, context=context)
+      return self.ollama.generate(prompt, context=context, **kwargs)
 
     backend = self.backends.get(decision.backend_name, self.backends['placeholder'])
-    return backend.generate(prompt, context)
+    return backend.generate(prompt, context, **kwargs)
 
   def summarize(self, text: str) -> str:
     """Summarize text using appropriate backend"""
