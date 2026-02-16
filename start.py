@@ -4,8 +4,8 @@ TAPAN_AI - Personal Life Assistant
 Single entry point for the application
 
 Usage:
-    python start.py           # Start CLI
-    python start.py --test    # Run all tests
+  python start.py           # Start CLI
+  python start.py --test    # Run all tests
 """
 import sys
 from pathlib import Path
@@ -16,20 +16,20 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 
 def main():
-    """Main entry point"""
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "--test":
-            from src.service.cli_service import run_tests
-            success = run_tests()
-            sys.exit(0 if success else 1)
-        elif sys.argv[1] == "--help":
-            print(__doc__)
-            sys.exit(0)
-    
-    # Start the CLI
-    from src.service.cli_service import main as cli_main
-    cli_main()
+  """Main entry point"""
+  if len(sys.argv) > 1:
+    if sys.argv[1] == "--test":
+      from src.service.cli_service import run_tests
+      success = run_tests()
+      sys.exit(0 if success else 1)
+    elif sys.argv[1] == "--help":
+      print(__doc__)
+      sys.exit(0)
+
+  # Start the CLI
+  from src.service.cli_service import main as cli_main
+  cli_main()
 
 
 if __name__ == "__main__":
-    main()
+  main()

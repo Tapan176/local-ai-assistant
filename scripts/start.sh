@@ -6,10 +6,10 @@ cd "$(dirname "$0")/.."
 
 # Activate virtual environment if it exists
 if [ -d "venv" ]; then
-    echo "Starting TAPAN-AI (venv)..."
-    source venv/bin/activate
+  echo "Starting TAPAN-AI (venv)..."
+  source venv/bin/activate
 else
-    echo "Starting TAPAN-AI (system python)..."
+  echo "Starting TAPAN-AI (system python)..."
 fi
 
 # Run the application

@@ -7,214 +7,214 @@ from src.agent.tools.base import BaseTool, ToolResult
 from src.db.base_repository import BaseRepository
 
 class FinanceTool(BaseTool):
-    def __init__(self, data_dir: Path):
-        self.data_dir = Path(data_dir)
-        self.db_path = self.data_dir / "finance.db"
-        
-        # Schemas
-        account_schema = """
-        CREATE TABLE IF NOT EXISTS accounts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL,
-            balance REAL DEFAULT 0,
-            type TEXT DEFAULT 'asset',
-            note TEXT
-        )
-        """
-        transaction_schema = """
-        CREATE TABLE IF NOT EXISTS transactions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            amount REAL NOT NULL,
-            type TEXT NOT NULL, 
-            category TEXT NOT NULL,
-            account TEXT NOT NULL,
-            note TEXT,
-            date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-        
-        self.accounts = BaseRepository(self.db_path, "accounts", account_schema)
-        self.transactions = BaseRepository(self.db_path, "transactions", transaction_schema)
-        self._ensure_default()
+  def __init__(self, data_dir: Path):
+    self.data_dir = Path(data_dir)
+    self.db_path = self.data_dir / "finance.db"
 
-    def _ensure_default(self):
-        if not self.accounts.list({"name": "default"}):
-            self.accounts.create({"name": "default", "balance": 0})
+    # Schemas
+    account_schema = """
+    CREATE TABLE IF NOT EXISTS accounts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT UNIQUE NOT NULL,
+      balance REAL DEFAULT 0,
+      type TEXT DEFAULT 'asset',
+      note TEXT
+    )
+    """
+    transaction_schema = """
+    CREATE TABLE IF NOT EXISTS transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      amount REAL NOT NULL,
+      type TEXT NOT NULL, 
+      category TEXT NOT NULL,
+      account TEXT NOT NULL,
+      note TEXT,
+      date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """
 
-    @property
-    def name(self) -> str:
-        return "finance"
+    self.accounts = BaseRepository(self.db_path, "accounts", account_schema)
+    self.transactions = BaseRepository(self.db_path, "transactions", transaction_schema)
+    self._ensure_default()
 
-    @property
-    def description(self) -> str:
-        return "Manage finances (accounts, expenses, income)"
+  def _ensure_default(self):
+    if not self.accounts.list({"name": "default"}):
+      self.accounts.create({"name": "default", "balance": 0})
 
-    @property
-    def actions(self) -> list:
-        return [
-            "accounts", "add_account", "delete_account", "rename_account",
-            "expense", "income", "transfer", "balance", 
-            "reset_all_balances", "bulk_delete", "update_account_balance"
-        ]
+  @property
+  def name(self) -> str:
+    return "finance"
 
-    def execute(self, action: str, params: Dict[str, Any]) -> ToolResult:
-        try:
-            # Dispatcher
-            if action == "accounts" or action == "balance" or action == "list":
-                return self.list_accounts()
-            if action == "add_account":
-                return self.add_account(params)
-            if action == "delete_account":
-                return self.delete_account(params)
-            if action == "rename_account":
-                return self.rename_account(params)
-            if action == "expense":
-                return self.add_transaction(params, "expense")
-            if action == "income":
-                return self.add_transaction(params, "income")
-            if action == "transfer":
-                return self.transfer(params)
-            if action == "reset_all_balances":
-                return self.reset_all()
-            if action == "bulk_delete":
-                return self.bulk_delete(params)
-            if action == "update_account_balance":
-                return self.update_balance(params)
-                
-            return ToolResult(False, f"Unknown action: {action}")
-        except Exception as e:
-            return ToolResult(False, f"Error: {str(e)}")
+  @property
+  def description(self) -> str:
+    return "Manage finances (accounts, expenses, income)"
 
-    # ================= IMPL =================
+  @property
+  def actions(self) -> list:
+    return [
+      "accounts", "add_account", "delete_account", "rename_account",
+      "expense", "income", "transfer", "balance", 
+      "reset_all_balances", "bulk_delete", "update_account_balance"
+    ]
 
-    def list_accounts(self) -> ToolResult:
-        accts = self.accounts.list(limit=100)
-        if not accts:
-            return ToolResult(True, "No accounts.")
-        
-        total = sum(a['balance'] for a in accts)
-        lines = [f"💰 Total Net Worth: {total:g}"]
-        for a in accts:
-            lines.append(f"- {a['name']}: {a['balance']:g}")
-            
-        return ToolResult(True, "\n".join(lines))
+  def execute(self, action: str, params: Dict[str, Any]) -> ToolResult:
+    try:
+      # Dispatcher
+      if action == "accounts" or action == "balance" or action == "list":
+        return self.list_accounts()
+      if action == "add_account":
+        return self.add_account(params)
+      if action == "delete_account":
+        return self.delete_account(params)
+      if action == "rename_account":
+        return self.rename_account(params)
+      if action == "expense":
+        return self.add_transaction(params, "expense")
+      if action == "income":
+        return self.add_transaction(params, "income")
+      if action == "transfer":
+        return self.transfer(params)
+      if action == "reset_all_balances":
+        return self.reset_all()
+      if action == "bulk_delete":
+        return self.bulk_delete(params)
+      if action == "update_account_balance":
+        return self.update_balance(params)
 
-    def add_account(self, params: Dict) -> ToolResult:
-        name = params.get("name")
-        if not name: return ToolResult(False, "Name required")
-        
-        # Check exist
-        existing = self.accounts.list({"name": name})
-        if existing:
-            return ToolResult(False, f"Account '{name}' already exists.")
-            
-        initial = float(params.get("opening_balance", 0))
-        self.accounts.create({"name": name, "balance": initial})
-        return ToolResult(True, f"✓ Account created: {name} ({initial:g})")
+      return ToolResult(False, f"Unknown action: {action}")
+    except Exception as e:
+      return ToolResult(False, f"Error: {str(e)}")
 
-    def delete_account(self, params: Dict) -> ToolResult:
-        name = params.get("name")
-        if not name: return ToolResult(False, "Name required")
-        if name == "default": return ToolResult(False, "Cannot delete default.")
-        
-        # Find ID
-        accts = self.accounts.list({"name": name})
-        if not accts: return ToolResult(False, "Account not found.")
-        
+  # ================= IMPL =================
+
+  def list_accounts(self) -> ToolResult:
+    accts = self.accounts.list(limit=100)
+    if not accts:
+      return ToolResult(True, "No accounts.")
+
+    total = sum(a['balance'] for a in accts)
+    lines = [f"💰 Total Net Worth: {total:g}"]
+    for a in accts:
+      lines.append(f"- {a['name']}: {a['balance']:g}")
+
+    return ToolResult(True, "\n".join(lines))
+
+  def add_account(self, params: Dict) -> ToolResult:
+    name = params.get("name")
+    if not name: return ToolResult(False, "Name required")
+
+    # Check exist
+    existing = self.accounts.list({"name": name})
+    if existing:
+      return ToolResult(False, f"Account '{name}' already exists.")
+
+    initial = float(params.get("opening_balance", 0))
+    self.accounts.create({"name": name, "balance": initial})
+    return ToolResult(True, f"✓ Account created: {name} ({initial:g})")
+
+  def delete_account(self, params: Dict) -> ToolResult:
+    name = params.get("name")
+    if not name: return ToolResult(False, "Name required")
+    if name == "default": return ToolResult(False, "Cannot delete default.")
+
+    # Find ID
+    accts = self.accounts.list({"name": name})
+    if not accts: return ToolResult(False, "Account not found.")
+
+    self.accounts.delete(accts[0]['id'])
+    return ToolResult(True, f"✓ Deleted account: {name}")
+
+  def rename_account(self, params: Dict) -> ToolResult:
+    old = params.get("old_name")
+    new = params.get("new_name")
+    if not old or not new: return ToolResult(False, "Old and new names required.")
+
+    accts = self.accounts.list({"name": old})
+    if not accts: return ToolResult(False, "Account not found.")
+
+    self.accounts.update(accts[0]['id'], {"name": new})
+    # Note: Transactions strictly text-based linking 'account' column 
+    # needs update too for consistency
+    self.transactions.update_by_text(old, {"account": new}, "account")
+
+    return ToolResult(True, f"✓ Renamed {old} -> {new}")
+
+  def add_transaction(self, params: Dict, type_: str) -> ToolResult:
+    amount = float(params.get("amount", 0))
+    if amount <= 0: return ToolResult(False, "Amount must be positive.")
+
+    acct_name = params.get("account", "default")
+    category = params.get("category", "misc")
+
+    accts = self.accounts.list({"name": acct_name})
+    if not accts: return ToolResult(False, f"Account '{acct_name}' not found.")
+
+    acct = accts[0]
+    new_bal = acct['balance'] - amount if type_ == "expense" else acct['balance'] + amount
+
+    # STRICT SAVER CHECK (70/30) - naive impl
+    # If expense, we just log it. "Enforcement" usually means advice or blocking.
+    # "Phase-15 functional" -> let's just record it.
+
+    self.accounts.update(acct['id'], {"balance": new_bal})
+    self.transactions.create({
+      "amount": amount,
+      "type": type_,
+      "category": category,
+      "account": acct_name,
+      "note": params.get("note", "")
+    })
+
+    return ToolResult(True, f"✓ {type_.title()}: {amount:g} ({category}) in {acct_name}")
+
+  def transfer(self, params: Dict) -> ToolResult:
+    src = params.get("from_account")
+    dst = params.get("to_account")
+    amt = float(params.get("amount", 0))
+
+    if not src or not dst: return ToolResult(False, "Source and Dest required.")
+    if amt <= 0: return ToolResult(False, "Positive amount required.")
+
+    s_acct = self.accounts.list({"name": src})
+    d_acct = self.accounts.list({"name": dst})
+
+    if not s_acct or not d_acct: return ToolResult(False, "Accounts not found.")
+
+    # update balances
+    self.accounts.update(s_acct[0]['id'], {"balance": s_acct[0]['balance'] - amt})
+    self.accounts.update(d_acct[0]['id'], {"balance": d_acct[0]['balance'] + amt})
+
+    self.transactions.create({
+      "amount": amt, "type": "transfer", "category": "transfer",
+      "account": src, "note": f"to {dst}"
+    })
+
+    return ToolResult(True, f"✓ Transferred {amt:g} {src}->{dst}")
+
+  def reset_all(self) -> ToolResult:
+    self.accounts.update_by_text("", {"balance": 0}, "name") # Hacky match all?
+    # Better:
+    all_accts = self.accounts.list(limit=1000)
+    for a in all_accts:
+      self.accounts.update(a['id'], {"balance": 0})
+    self.transactions.delete_all()
+    return ToolResult(True, "✓ System Reset: Money 0")
+
+  def bulk_delete(self, params: Dict) -> ToolResult:
+    names = params.get("names", [])
+    if not names: return ToolResult(False, "No names provided.")
+    count = 0
+    for n in names:
+      accts = self.accounts.list({"name": n})
+      if accts:
         self.accounts.delete(accts[0]['id'])
-        return ToolResult(True, f"✓ Deleted account: {name}")
+        count += 1
+    return ToolResult(True, f"✓ Deleted {count} accounts.")
 
-    def rename_account(self, params: Dict) -> ToolResult:
-        old = params.get("old_name")
-        new = params.get("new_name")
-        if not old or not new: return ToolResult(False, "Old and new names required.")
-        
-        accts = self.accounts.list({"name": old})
-        if not accts: return ToolResult(False, "Account not found.")
-        
-        self.accounts.update(accts[0]['id'], {"name": new})
-        # Note: Transactions strictly text-based linking 'account' column 
-        # needs update too for consistency
-        self.transactions.update_by_text(old, {"account": new}, "account")
-        
-        return ToolResult(True, f"✓ Renamed {old} -> {new}")
-
-    def add_transaction(self, params: Dict, type_: str) -> ToolResult:
-        amount = float(params.get("amount", 0))
-        if amount <= 0: return ToolResult(False, "Amount must be positive.")
-        
-        acct_name = params.get("account", "default")
-        category = params.get("category", "misc")
-        
-        accts = self.accounts.list({"name": acct_name})
-        if not accts: return ToolResult(False, f"Account '{acct_name}' not found.")
-        
-        acct = accts[0]
-        new_bal = acct['balance'] - amount if type_ == "expense" else acct['balance'] + amount
-        
-        # STRICT SAVER CHECK (70/30) - naive impl
-        # If expense, we just log it. "Enforcement" usually means advice or blocking.
-        # "Phase-15 functional" -> let's just record it.
-        
-        self.accounts.update(acct['id'], {"balance": new_bal})
-        self.transactions.create({
-            "amount": amount,
-            "type": type_,
-            "category": category,
-            "account": acct_name,
-            "note": params.get("note", "")
-        })
-        
-        return ToolResult(True, f"✓ {type_.title()}: {amount:g} ({category}) in {acct_name}")
-
-    def transfer(self, params: Dict) -> ToolResult:
-        src = params.get("from_account")
-        dst = params.get("to_account")
-        amt = float(params.get("amount", 0))
-        
-        if not src or not dst: return ToolResult(False, "Source and Dest required.")
-        if amt <= 0: return ToolResult(False, "Positive amount required.")
-        
-        s_acct = self.accounts.list({"name": src})
-        d_acct = self.accounts.list({"name": dst})
-        
-        if not s_acct or not d_acct: return ToolResult(False, "Accounts not found.")
-        
-        # update balances
-        self.accounts.update(s_acct[0]['id'], {"balance": s_acct[0]['balance'] - amt})
-        self.accounts.update(d_acct[0]['id'], {"balance": d_acct[0]['balance'] + amt})
-        
-        self.transactions.create({
-            "amount": amt, "type": "transfer", "category": "transfer",
-            "account": src, "note": f"to {dst}"
-        })
-        
-        return ToolResult(True, f"✓ Transferred {amt:g} {src}->{dst}")
-
-    def reset_all(self) -> ToolResult:
-        self.accounts.update_by_text("", {"balance": 0}, "name") # Hacky match all?
-        # Better:
-        all_accts = self.accounts.list(limit=1000)
-        for a in all_accts:
-            self.accounts.update(a['id'], {"balance": 0})
-        self.transactions.delete_all()
-        return ToolResult(True, "✓ System Reset: Money 0")
-
-    def bulk_delete(self, params: Dict) -> ToolResult:
-        names = params.get("names", [])
-        if not names: return ToolResult(False, "No names provided.")
-        count = 0
-        for n in names:
-            accts = self.accounts.list({"name": n})
-            if accts:
-                self.accounts.delete(accts[0]['id'])
-                count += 1
-        return ToolResult(True, f"✓ Deleted {count} accounts.")
-
-    def update_balance(self, params: Dict) -> ToolResult:
-        name = params.get("name")
-        amt = float(params.get("amount", 0))
-        accts = self.accounts.list({"name": name})
-        if not accts: return ToolResult(False, "Account not found.")
-        self.accounts.update(accts[0]['id'], {"balance": amt})
-        return ToolResult(True, f"✓ Set {name} to {amt:g}")
+  def update_balance(self, params: Dict) -> ToolResult:
+    name = params.get("name")
+    amt = float(params.get("amount", 0))
+    accts = self.accounts.list({"name": name})
+    if not accts: return ToolResult(False, "Account not found.")
+    self.accounts.update(accts[0]['id'], {"balance": amt})
+    return ToolResult(True, f"✓ Set {name} to {amt:g}")

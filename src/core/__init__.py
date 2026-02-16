@@ -12,13 +12,13 @@ from .normalizer import Normalizer
 from .parser import HinglishParser
 
 __all__ = [
-    'MemoryManager',
-    'FinanceManager', 
-    'ReminderManager',
-    'HabitTracker',
-    'JournalManager',
-    'KnowledgeManager',
-    'IntentRouter',
-    'Normalizer',
-    'HinglishParser'
+  'MemoryManager',
+  'FinanceManager', 
+  'ReminderManager',
+  'HabitTracker',
+  'JournalManager',
+  'KnowledgeManager',
+  'IntentRouter',
+  'Normalizer',
+  'HinglishParser'
 ]

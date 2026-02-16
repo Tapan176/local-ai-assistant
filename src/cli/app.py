@@ -12,18 +12,18 @@ sys.path.insert(0, str(project_root))
 from src.agent.orchestrator import Orchestrator
 
 def main():
-    print("Loading TAPAN_AI (SQLite-First)...")
-    
-    # Initialize Orchestrator with data directory
-    data_dir = project_root / "data"
-    data_dir.mkdir(exist_ok=True)
-    
-    try:
-        orchestrator = Orchestrator(data_dir=data_dir)
-        orchestrator.run_cli_loop()
-    except Exception as e:
-        print(f"Critical Error: {e}")
-        sys.exit(1)
+  print("Loading TAPAN_AI (SQLite-First)...")
+
+  # Initialize Orchestrator with data directory
+  data_dir = project_root / "data"
+  data_dir.mkdir(exist_ok=True)
+
+  try:
+    orchestrator = Orchestrator(data_dir=data_dir)
+    orchestrator.run_cli_loop()
+  except Exception as e:
+    print(f"Critical Error: {e}")
+    sys.exit(1)
 
 if __name__ == "__main__":
-    main()
+  main()
