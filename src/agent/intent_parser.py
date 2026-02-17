@@ -62,6 +62,15 @@ class IntentParser:
     text_lower = text.lower().strip()
 
     # 0. Pre-process Hindi
+
+    typo_map = {
+      "defalut": "default",
+      "banace": "balance",
+      "balace": "balance",
+      "frient": "friend",
+    }
+    for wrong, right in typo_map.items():
+      text_lower = text_lower.replace(wrong, right)
     for hindi, eng in self.HINDI_MAP.items():
       if hindi in text_lower:
         text_lower = text_lower.replace(hindi, eng)
@@ -133,14 +142,29 @@ class IntentParser:
       }
 
     # Balance / Show Accounts  - Make more specific
-    if re.search(r'(?:^|\s)balance(?:\s|$)', text_lower) or \
-       (re.search(r'(?:^|\s)(?:list|show)\s+(?:all\s+)?accounts?(?:\s|$)', text_lower)):
+    if (not text_lower.startswith('set ')) and (re.search(r'(?:^|\s)balance(?:\s|$)', text_lower) or \
+       (re.search(r'(?:^|\s)(?:list|show)\s+(?:all\s+)?accounts?(?:\s|$)', text_lower))):
       return {"tool": "finance", "method": "accounts", "params": {}, "confidence": 1.0}
+
+
+    # Set account balance: "set default balance to 0" (with typo tolerance)
+    match = re.search(r'^set\s+(\w+)\s+b(?:a|an)l?ance\s+to\s+(-?\d+(?:\.\d+)?)$', text_lower)
+    if match:
+      return {"tool": "finance", "method": "update_account_balance", "params": {"name": match.group(1), "amount": float(match.group(2))}, "confidence": 0.95}
 
     # Delete Account
     match = re.search(r'(?:delete|remove)\s+account\s+(\w+)', text_lower)
     if match:
       return {"tool": "finance", "method": "delete_account", "params": {"name": match.group(1)}, "confidence": 1.0}
+
+    # Delete account variants: "delete abi account", "delete abi", "remove abi"
+    match = re.search(r'^(?:delete|remove)\s+(\w+)\s+account$', text_lower)
+    if match:
+      return {"tool": "finance", "method": "delete_account", "params": {"name": match.group(1)}, "confidence": 0.98}
+
+    match = re.search(r'^(?:delete|remove)\s+(\w+)$', text_lower)
+    if match and match.group(1) not in ["memory", "reminder", "relation", "account", "accounts", "friend"]:
+      return {"tool": "finance", "method": "delete_account", "params": {"name": match.group(1)}, "confidence": 0.75}
 
     # === PHASE 17: ADAPTIVE COMMANDS (High Priority) ===
     if text_lower in ["suggestions", "suggest", "tips", "proactive"]:
@@ -248,7 +272,19 @@ class IntentParser:
       return {"tool": "experience", "method": "list", "params": {}, "confidence": 1.0}
 
     # === RELATION ===
+
+    # Friend / relation list queries
+    if re.search(r'(?:^|\s)(?:show|list)\s+(?:my\s+)?(?:friend|friends|friend\s+list|relations?)(?:\s|$)', text_lower):
+      return {"tool": "relation", "method": "list", "params": {}, "confidence": 0.95}
+
+    if re.search(r'^who\s+are\s+in\s+my\s+current\s+(?:friend|frient)\s+data$', text_lower):
+      return {"tool": "relation", "method": "list", "params": {}, "confidence": 0.95}
     
+
+    match = re.search(r'^add\s+friend\s+(.+)', text_lower)
+    if match:
+      return {"tool": "relation", "method": "add", "params": {"name": match.group(1).strip(), "relationship": "friend"}, "confidence": 0.95}
+
     match = re.search(r'who\s+is\s+(.+)', text_lower)
     if match:
       return {"tool": "relation", "method": "get", "params": {"name": match.group(1).rstrip("?")}, "confidence": 1.0}

@@ -2,6 +2,7 @@
 Finance Tool - Money Management (Strict Saver)
 """
 from typing import Any, Dict, List, Optional
+import difflib
 from pathlib import Path
 from src.agent.tools.base import BaseTool, ToolResult
 from src.db.base_repository import BaseRepository
@@ -170,6 +171,11 @@ class FinanceTool(BaseTool):
 
     accts = self.accounts.list({"name": acct_name})
     if not accts and type_ == "income":
+      existing_names = [a.get("name", "") for a in self.accounts.list(limit=500)]
+      close = difflib.get_close_matches(acct_name, existing_names, n=1, cutoff=0.6)
+      if close:
+        return ToolResult(False, f"Account '{acct_name}' not found. Did you mean '{close[0]}'? Reply with 'add {amount:g} to {close[0]}' or 'add account {acct_name} {amount:g}'.")
+      # No close match -> safe to auto-create for convenience.
       # Top-up flows should be resilient: auto-create destination account.
       self.accounts.create({"name": acct_name, "balance": 0})
       accts = self.accounts.list({"name": acct_name})

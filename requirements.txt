@@ -1,6 +1,6 @@
 # Core dependencies
 python-dateutil
-python-dateparser
+dateparser
 pydantic
 rich
 pytest
@@ -10,3 +10,7 @@ schedule
 # Uncomment if using CogneeTool features:
 # cognee
 # neo4j
+speechrecognition
+pyttsx3
+protego>=0.1
+playwright>=1.9.0

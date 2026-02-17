@@ -84,6 +84,12 @@ NEO4J_PASSWORD=your_password
 # CLI mode
 python -m src.cli.app
 
+# Voice mode
+python start_agent.py --voice
+
+# Voice owner-only strict mode (ignores non-verified speakers)
+python start_agent.py --voice --voice-strict
+
 # Or via start script
 python start.py
 ```
@@ -93,6 +99,8 @@ python start.py
 | Category | Command | Example |
 |----------|---------|---------|
 | **Finance** | `expense <amt> <cat>` | `expense 500 food` |
+| | `delete <account>` / `delete <account> account` | `delete abi` |
+| | `set <account> balance to <amount>` | `set default balance to 0` |
 | | `income <amt> <cat>` | `income 1000 salary` |
 | | `transfer <amt> from A to B` | `transfer 500 from savings to wallet` |
 | | `show accounts` / `balance` | |
@@ -105,7 +113,10 @@ python start.py
 | **Experience** | `log <text>` | `log went to gym` |
 | | `show experiences` / `stats` | |
 | **Reminder** | `remind <text>` | `remind me to buy milk` |
-| | `show reminders` | |
+| **Relation** | `show friend list` / `add friend <name>` | `add friend rahul` |
+| **Voice** | `register my voice as <name>` | `register my voice as tapan` |
+| | `set active voice <name>` | `set active voice tapan` |
+| **Reminder** | `show reminders` | |
 | **System** | `help` / `list` / `clear` / `exit` | |
 
 **Hinglish supported:** `yaad rakho`, `dikhao`, `hata do`, etc.
@@ -129,3 +140,10 @@ pytest tests/test_memory_router.py -v
 - **Hinglish Default**: Natural Hindi-English interaction (70/30 rule)
 - **OS Independent**: Works on Windows and Linux
 - **Privacy First**: All data stays local in `data/`
+
+
+## Smart Safety Behaviors
+
+- **Account typo protection**: if you say `add 2500 to abi` and `sbi` exists, the assistant asks: `Did you mean sbi?` instead of silently creating the wrong account.
+- **Deletion variants**: supports `delete abi`, `remove abi`, `delete abi account`, `remove account abi`.
+- **Friend/relationship list**: supports `show friend list` and `who are in my current frient data`.
