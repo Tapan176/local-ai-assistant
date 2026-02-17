@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 import shutil
 from pathlib import Path
-from typing import Iterable, List
+from typing import List
 
 
 ROOT = Path(__file__).resolve().parents[1]

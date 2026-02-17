@@ -81,7 +81,7 @@ class DailyPlan:
     return sum(1 for t in self.tasks if t.completed)
 
 
-class PlannerV2:
+class Planner:
   """
   Context-aware daily planner.
 

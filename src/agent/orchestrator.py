@@ -46,15 +46,10 @@ def _get_decision_engine(data_dir: Path):
   global _decision_engine
   if _decision_engine is None:
     try:
-      from src.agent.decision_engine_v2 import DecisionEngineV2
-      _decision_engine = DecisionEngineV2(data_dir)
+      from src.agent.decision_engine import DecisionEngine
+      _decision_engine = DecisionEngine(data_dir)
     except Exception:
-      # Fallback to v1 if v2 fails
-      try:
-        from src.agent.decision_engine import DecisionEngine
-        _decision_engine = DecisionEngine(data_dir)
-      except Exception:
-        _decision_engine = None
+      _decision_engine = None
   return _decision_engine
 
 
@@ -62,8 +57,8 @@ def _get_planner(data_dir: Path):
   global _planner
   if _planner is None:
     try:
-      from src.agent.planner_v2 import PlannerV2
-      _planner = PlannerV2(data_dir)
+      from src.agent.planner import Planner
+      _planner = Planner(data_dir)
     except Exception:
       _planner = None
   return _planner

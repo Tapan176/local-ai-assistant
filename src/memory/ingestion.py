@@ -19,7 +19,6 @@ Domains:
 """
 import sqlite3
 import json
-import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple

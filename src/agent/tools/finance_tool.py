@@ -262,7 +262,6 @@ class FinanceTool(BaseTool):
     accts = self.accounts.list({"name": name})
     if not accts: return ToolResult(False, "Account not found.")
     self.accounts.update(accts[0]['id'], {"balance": amt})
-    self.accounts.update(accts[0]['id'], {"balance": amt})
     return ToolResult(True, f"[OK] Set {name} to {amt:g}")
 
   def bulk_topup(self, params: Dict) -> ToolResult:
@@ -291,12 +290,8 @@ class FinanceTool(BaseTool):
     return ToolResult(True, summary)
 
   def get_history(self, params: Dict) -> ToolResult:
-    # return transactions
     limit = int(params.get("limit", 10))
-    txs = self.transactions.list(limit=limit) # BaseRepo list defaults order by id desc?
-    # BaseRepo.list currently doesn't support order_by param in list() kwargs?
-    # Let's check BaseRepository or just list all and slice.
-    # transactions table has date.
+    txs = self.transactions.list(limit=limit)
     
     if not txs: return ToolResult(True, "No transactions.")
     

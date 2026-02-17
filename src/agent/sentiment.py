@@ -2,7 +2,7 @@
 Sentiment Engine - Detects emotional valence and arousal from text.
 Uses a lightweight lexicon approach for speed, suitable for real-time local use.
 """
-from typing import Dict, Tuple
+from typing import Dict
 
 class SentimentEngine:
     """

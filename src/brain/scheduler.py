@@ -48,9 +48,6 @@ class Scheduler:
     pending_count = self.reminders.get_pending_count()
 
     # 4. Get Finance Status (for daily budget context)
-    # We can add a finance snapshot to the agenda
-    month_str = now.strftime("%Y-%m")
-    # monthly_fin = self.finance.get_monthly_report(month_str) # Does not exist
     total_balance = self.finance.get_total_balance()
 
     # --- Build Output ---
