@@ -182,11 +182,11 @@ class Orchestrator:
     self.tools[tool.name] = tool
 
   def _get_conversation_mgr(self):
-    """Lazy-init ConversationManager."""
+    """Lazy-init ConversationManager with data_dir for persistence."""
     if self._conversation_mgr is None:
       try:
         from src.agent.conversation_manager import ConversationManager
-        self._conversation_mgr = ConversationManager()
+        self._conversation_mgr = ConversationManager(data_dir=self.data_dir)
       except Exception:
         pass
     return self._conversation_mgr
@@ -202,7 +202,7 @@ class Orchestrator:
         pass
     return self._personalizer
 
-  def process(self, text: str) -> str:
+  def process(self, text: str, source: str = "text") -> str:
     """
     Main Event Loop:
     1. Resolve references (multi-turn)
@@ -210,6 +210,10 @@ class Orchestrator:
     3. Route to tool / decision engine / planner / LLM
     4. Apply PersonaTone + Personalizer formatting
     5. Learn from interaction + save conversation turn
+
+    Args:
+      text: User input text
+      source: Source of input ("text", "voice", etc.)
     """
     text = text.strip()
     if not text:
@@ -237,9 +241,15 @@ class Orchestrator:
             llm = _get_llm(self.data_dir)
             if llm:
                 self.semantic_parser = SemanticIntentParser(self.data_dir, llm)
-        
+
         if self.semantic_parser:
-             intent = self.semantic_parser.parse(text)
+             # Fetch short context for disambiguation
+             context_str = ""
+             if conv:
+                 # Get last 2 turns for context
+                 context_str = conv.get_recent_history(limit=2)
+
+             intent = self.semantic_parser.parse(text, context=context_str)
 
     if intent:
       response = self._handle_intent(intent, text)
@@ -249,10 +259,10 @@ class Orchestrator:
       response = self._llm_fallback(text)
       intent_name = "llm_fallback"
 
-    # Phase 17: Track conversation turn
+    # Phase 17: Track conversation turn with source information
     if conv:
       entities = intent.get("params", {}) if intent else {}
-      conv.add_turn(text, response, intent_name, entities)
+      conv.add_turn(text, response, intent_name, entities, source=source)
 
     # Phase 17: Learn from interaction
     try:
@@ -660,64 +670,70 @@ class Orchestrator:
     personalizer = self._get_personalizer()
     if personalizer:
       personalizer.reset_session()
-    return "Session ended. Fresh start! 🔄"
+    return "Session ended. Fresh start!"
 
   def _show_help(self) -> str:
     return """
-🤖 TAPAN_AI — Your Personal Jarvis
+[JARVIS] TAPAN_AI - Your Personal Companion
 
-💰 FINANCE (Immutable DB):
-  expense 500 food        → Add expense
-  income 1000 salary      → Add income
-  transfer 100 from A to B → Transfer
-  show accounts / balance  → View accounts
-  add account savings 5000 → New account
+[FINANCE] Financial Management:
+  expense 500 food        -> Add expense
+  income 1000 salary      -> Add income
+  transfer 100 from A to B -> Transfer
+  show accounts / balance  -> View accounts
+  add account savings 5000 -> New account
 
-🧠 MEMORY (Mutable DB):
-  remember I like pizza    → Save fact
-  show memories            → List all
-  recall food preferences  → Semantic search (Cognee)
-  search memory pizza      → Search memories
+[MEMORY] Memory Management:
+  remember I like pizza    -> Save fact
+  show memories            -> List all
+  recall food preferences  -> Semantic search (Cognee)
+  search memory pizza      -> Search memories
 
-📝 EXPERIENCE:
-  log went to gym          → Log event
-  show experiences / stats → View activity
+[EXPERIENCE] Activity Logging:
+  log went to gym          -> Log event
+  show experiences / stats -> View activity
 
-⏰ REMINDERS:
-  remind me to buy milk    → Set reminder
-  show reminders           → List reminders
+[REMINDER] Task Management:
+  remind me to buy milk    -> Set reminder
+  show reminders           -> List reminders
 
-🤔 DECISIONS:
-  should I buy PS5 for 50000? → Finance-aware advice
-  can I afford a trip?        → Budget analysis
+[DECISION] Decision Support:
+  should I buy PS5 for 50000? -> Finance-aware advice
+  can I afford a trip?        -> Budget analysis
 
-📋 PLANNING:
-  daily plan / aaj ka plan → Smart daily schedule
-  what should I do today?  → Next action
+[PLANNING] Daily Planning:
+  daily plan / aaj ka plan -> Smart daily schedule
+  what should I do today?  -> Next action
 
-🤖 ASK (RAG + LLM):
-  ask what are my hobbies? → Memory-augmented answer
-  ask summarize my week    → Context-aware summary
+[ASK] Knowledge & AI:
+  ask what are my hobbies? -> Memory-augmented answer
+  ask about my spending patterns -> Insights from data
+  ask summarize my week    -> Context-aware summary
 
-🔧 LLM MANAGEMENT:
-  llm status               → Check Ollama connection
-  llm models               → List available models
-  llm switch llama3.2:3b   → Change model
+[LLM] Model Management:
+  llm status               -> Check Ollama connection
+  llm models               -> List available models
+  llm switch <model>       -> Change model
 
-💡 ADAPTIVE INTELLIGENCE:
-  suggestions              → Proactive tips & reminders
-  profile / my profile     → View learned profile
-  profile stats            → Profile context for LLM
-  session / session summary → Current conversation stats
-  end session              → Start fresh conversation
-  perf report              → Performance metrics
+[SENTIMENT] Emotional Tracking:
+  I'm feeling great!       -> Automatic sentiment tracking
+  feeling a bit sad today  -> Mood-aware responses
 
-⚙️ SYSTEM:
-  /use_cognee / /use_sqlite → Toggle memory backend
-  help / clear / exit       → System commands
-  reset system              → Factory reset
+[INTELLIGENCE] Adaptive Intelligence:
+  suggestions              -> Proactive tips & reminders
+  profile / my profile     -> View learned profile
+  profile stats            -> Profile context for LLM
+  session / session summary -> Current conversation stats
+  end session              -> Start fresh conversation
+  perf report              -> Performance metrics
 
-💬 Or just talk to me — I'll chat or save it as memory!
+[CONFIG] Configuration:
+  /use_cognee / /use_sqlite -> Toggle memory backend
+  help / clear / exit       -> System commands
+  reset system              -> Factory reset
+
+[CHAT] Just Talk:
+  Or just talk to me - I'll chat or save it as memory!
 """
 
   def _list_commands(self) -> str:
@@ -730,17 +746,17 @@ class Orchestrator:
   def _system_reset(self) -> str:
     """Factory Reset: Clear all data from all tools."""
     results = []
-    print("⚠️  INITIATING FACTORY RESET...")
-    
+    print("[WARNING] INITIATING FACTORY RESET...")
+
     for name, tool in self.tools.items():
       try:
         if hasattr(tool, 'execute'):
           # Try delete_all first
           res = tool.execute("delete_all", {})
-          
+
           # If failed or not implemented, try reset_all_balances (legacy finance)
           if not res.success:
-             # Only try fallback if distinct method exists handling 
+             # Only try fallback if distinct method exists handling
              # (checks inside execute usually handle this, but safe to retry if specific code)
              if name == "finance":
                  res = tool.execute("reset_all_balances", {})

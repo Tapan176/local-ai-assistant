@@ -47,12 +47,13 @@ class TinyBackend:
       ]
     }
 
-  def generate(self, prompt: str, context: str = "") -> str:
+  def generate(self, prompt: str, context: str = "", **kwargs) -> str:
     """Generate instant response
 
     Args:
       prompt: User prompt
       context: Additional context
+      **kwargs: Additional options (max_tokens, temperature, etc.) - ignored in TinyBackend
 
     Returns:
       Response text

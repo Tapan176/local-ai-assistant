@@ -47,10 +47,14 @@ class SemanticIntentParser:
             "ask": {
                 "description": "Answer general questions using knowledge base (RAG).",
                 "actions": ["query"]
+            },
+            "relation": {
+                "description": "Retrieve information about people, relationships, and entities.",
+                "actions": ["get", "add"]
             }
         }
 
-    def parse(self, text: str) -> Optional[Dict[str, Any]]:
+    def parse(self, text: str, context: str = "") -> Optional[Dict[str, Any]]:
         """
         Parse intent using LLM (System 2).
         Returns tool dict or None.
@@ -59,11 +63,12 @@ class SemanticIntentParser:
             return None
             
         # Prompt Engineering for Classification
-        prompt = self._build_prompt(text)
+        prompt = self._build_prompt(text, context)
         
         try:
             # Call LLM (mocked or real)
-            response = self.llm.generate(prompt, max_tokens=100, temperature=0.0)
+            # Now safe to pass kwargs due to OllamaBackend fix
+            response = self.llm.generate(prompt, max_tokens=200, temperature=0.0)
             
             # Extract JSON
             return self._extract_json(response)
@@ -71,8 +76,13 @@ class SemanticIntentParser:
             print(f"Semantic Parse Error: {e}")
             return None
 
-    def _build_prompt(self, text: str) -> str:
+    def _build_prompt(self, text: str, context: str = "") -> str:
         tools_str = json.dumps(self.tool_schema, indent=2)
+        
+        context_block = ""
+        if context:
+            context_block = f"Context from previous turn:\n{context}\n\n"
+            
         return f"""
 You are the Intent Classifier for TAPAN_AI.
 Map the user query to the correct tool and action.
@@ -80,7 +90,7 @@ Map the user query to the correct tool and action.
 Available Tools:
 {tools_str}
 
-User Query: "{text}"
+{context_block}User Query: "{text}"
 
 Output JSON format:
 {{

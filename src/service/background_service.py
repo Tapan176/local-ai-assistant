@@ -17,11 +17,13 @@ class BackgroundService:
   - Autonomous Tasks: Polled in main loop.
   """
   
-  def __init__(self, orchestrator, input_provider: Callable[[], str]):
+  def __init__(self, orchestrator, input_provider: Callable[[], str], voice_interface=None):
     self.orch = orchestrator
     self.input_provider = input_provider
+    self.voice = voice_interface
     self.input_queue = queue.Queue()
     self.running = False
+    self.stop_event = threading.Event()
     
     # Task Timers (last run time)
     self.timers = {
@@ -42,38 +44,67 @@ class BackgroundService:
   def start(self):
     """Start the event loop (BLOCKING)."""
     self.running = True
+    self.stop_event.clear()
     
-    # Start Input Thread
+    # Start Input Thread (Keyboard)
     input_thread = threading.Thread(target=self._input_loop, daemon=True)
     input_thread.start()
     
-    print("🚀 TAPAN_AI Event Loop Started")
+    # Start Voice Thread (if enabled)
+    if self.voice:
+      print("[INFO] Voice Interface Active")
+      voice_thread = threading.Thread(
+        target=self.voice.listen_loop,
+        args=(self.input_queue.put, self.stop_event),
+        daemon=True
+      )
+      voice_thread.start()
+
+    print("[INFO] TAPAN_AI Event Loop Started")
     print("   - Input: Thread-safe queue")
     print("   - Tasks: Main thread polling")
-    
+
     try:
       while self.running:
         self.tick()
         time.sleep(0.1)  # Prevent CPU hogging
     except KeyboardInterrupt:
-      print("\n🛑 Stopping...")
+      print("\n[INFO] Stopping...")
     except Exception as e:
       print(f"\nCRITICAL ERROR in Event Loop: {e}")
       traceback.print_exc()
+    finally:
+      self.stop_event.set()
 
   def stop(self):
     self.running = False
+    self.stop_event.set()
 
   def tick(self):
     """One cycle of the event loop."""
     # 1. Process User Input (if any)
     try:
       while not self.input_queue.empty():
-        text = self.input_queue.get_nowait()
+        item = self.input_queue.get_nowait()
+
+        # Item can be a dict with {"text": ..., "source": ...} or just a string
+        if isinstance(item, dict):
+          text = item.get("text", "")
+          source = item.get("source", "text")
+        else:
+          text = item
+          source = "text"
+
         if text:
-          print(f"\n👤 You: {text}")
-          response = self.orch.process(text)
-          print(f"🤖 Jarvis: {response}")
+          source_marker = "[Voice] " if source == "voice" else ""
+          print(f"\n[YOU {source_marker}]: {text}")
+          response = self.orch.process(text, source=source)
+          print(f"[JARVIS]: {response}")
+
+          # Speak response if voice enabled
+          if self.voice:
+             self.voice.speak(response)
+
     except queue.Empty:
       pass
 
@@ -120,18 +151,18 @@ class BackgroundService:
   def _check_reminders(self):
     """Check for due reminders via ProactiveEngine."""
     try:
-      # We access ProactiveEngine via Orchestrator if possible, 
+      # We access ProactiveEngine via Orchestrator if possible,
       # or directly if we had the instance.
       # Orchestrator lazy loads ProactiveEngine.
       # We can simply call 'suggestions' command silently to get active items?
       # Better: use the engine directly if exposed.
-      
+
       # For now, let's use the Orchestrator's internal accessor if available
       # or rely on a new method in Orchestrator `autonomous_check`
       if hasattr(self.orch, "autonomous_check"):
         notifications = self.orch.autonomous_check("reminders")
         for note in notifications:
-          print(f"\n🔔 Reminder: {note}")
+          print(f"\n[REMINDER] {note}")
     except Exception as e:
       print(f"Error checking reminders: {e}")
 
@@ -141,7 +172,7 @@ class BackgroundService:
       if hasattr(self.orch, "autonomous_check"):
         alert = self.orch.autonomous_check("system")
         if alert:
-          print(f"\n⚠️ System Alert: {alert}")
+          print(f"\n[ALERT] System: {alert}")
     except Exception:
       pass
 

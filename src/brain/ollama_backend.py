@@ -27,10 +27,9 @@ class OllamaBackend:
     self.timeout = timeout
     self.max_retries = max_retries
     self.name = "ollama"
-    self.name = "ollama"
-    self.current_model = None  # Auto-detect on first use
-    self._available_models = None
-    self._is_ready = None
+    self.current_model: str = ""  # Safe default
+    self._available_models: List[str] = []
+    self._is_ready: bool = False
     
     # Configuration
     self.config = self._load_config()
@@ -152,13 +151,14 @@ class OllamaBackend:
     return False
 
   def generate(self, prompt: str, context: str = "",
-               model: str = None) -> str:
+               model: str = None, **kwargs) -> str:
     """Generate response using Ollama with retry logic.
 
     Args:
       prompt: User prompt
       context: Additional context
       model: Model name (uses current_model if None)
+      **kwargs: Additional options (e.g., max_tokens, temperature)
 
     Returns:
       Generated text response
@@ -173,6 +173,13 @@ class OllamaBackend:
     if context:
       full_prompt = f"Context:\n{context}\n\nQuestion: {prompt}\n\nAnswer:"
 
+    # Map kwargs to Ollama options
+    options = {
+      "temperature": kwargs.get("temperature", 0.7),
+      "num_predict": kwargs.get("max_tokens", 512),  # Map max_tokens to num_predict
+      **{k: v for k, v in kwargs.items() if k not in ["temperature", "max_tokens"]}
+    }
+
     last_error = None
     for attempt in range(self.max_retries):
       try:
@@ -181,10 +188,7 @@ class OllamaBackend:
           "model": model,
           "prompt": full_prompt,
           "stream": False,
-          "options": {
-            "temperature": 0.7,
-            "num_predict": 512
-          }
+          "options": options
         }
 
         data = json.dumps(payload).encode('utf-8')
@@ -272,6 +276,40 @@ class OllamaBackend:
 
     except Exception as e:
       yield f"[Streaming error: {e}]"
+
+  def embeddings(self, prompt: str, model: str = None) -> List[float]:
+    """Generate embeddings for text."""
+    if not self.is_ready():
+      return []
+
+    model = model or self.config.get("embedding_model", "nomic-embed-text")
+    # Fallback to current model if embedding specific not set, 
+    # but specific embedding models are better.
+    if not self.has_model(model):
+       # Try current model as fallback
+       model = self._get_model()
+
+    try:
+      url = f"{self.base_url}/api/embeddings"
+      payload = {
+        "model": model,
+        "prompt": prompt
+      }
+
+      data = json.dumps(payload).encode('utf-8')
+      req = urllib.request.Request(
+        url,
+        data=data,
+        headers={'Content-Type': 'application/json'},
+        method='POST'
+      )
+
+      with urllib.request.urlopen(req, timeout=self.timeout) as response:
+        result = json.loads(response.read().decode())
+        return result.get('embedding', [])
+    except Exception as e:
+      print(f"[Ollama Embeddings Error]: {e}")
+      return []
 
   def summarize(self, text: str, model: str = None) -> str:
     """Summarize text using Ollama."""

@@ -100,7 +100,7 @@ class FinanceTool(BaseTool):
       return ToolResult(True, "No accounts.")
 
     total = sum(a['balance'] for a in accts)
-    lines = [f"💰 Total Net Worth: {total:g}"]
+    lines = [f"[NET WORTH] Total: {total:g}"]
     for a in accts:
       lines.append(f"- {a['name']}: {a['balance']:g}")
 
@@ -119,7 +119,7 @@ class FinanceTool(BaseTool):
     atype = params.get("type", "asset")
     note = params.get("note", "")
     self.accounts.create({"name": name, "balance": initial, "type": atype, "note": note})
-    return ToolResult(True, f"✓ Account created: {name} ({initial:g})")
+    return ToolResult(True, f"[OK] Account created: {name} ({initial:g})")
 
   def delete_account(self, params: Dict) -> ToolResult:
     name = params.get("name")
@@ -131,7 +131,7 @@ class FinanceTool(BaseTool):
     if not accts: return ToolResult(False, "Account not found.")
 
     self.accounts.delete(accts[0]['id'])
-    return ToolResult(True, f"✓ Deleted account: {name}")
+    return ToolResult(True, f"[OK] Deleted account: {name}")
 
   def get_account(self, params: Dict) -> ToolResult:
     name = params.get("name")
@@ -157,7 +157,7 @@ class FinanceTool(BaseTool):
     # needs update too for consistency
     self.transactions.update_by_text(old, {"account": new}, "account")
 
-    return ToolResult(True, f"✓ Renamed {old} -> {new}")
+    return ToolResult(True, f"[OK] Renamed {old} -> {new}")
 
   def add_transaction(self, params: Dict, type_: str) -> ToolResult:
     amount = float(params.get("amount", 0))
@@ -185,7 +185,7 @@ class FinanceTool(BaseTool):
       "note": params.get("note", "")
     })
 
-    return ToolResult(True, f"✓ {type_.title()}: {amount:g} ({category}) in {acct_name}")
+    return ToolResult(True, f"[OK] {type_.title()}: {amount:g} ({category}) in {acct_name}")
 
   def transfer(self, params: Dict) -> ToolResult:
     source_name = params.get("from_account")
@@ -209,7 +209,7 @@ class FinanceTool(BaseTool):
       "account": source_name, "note": f"to {dest_name}"
     })
 
-    return ToolResult(True, f"✓ Transferred {amount:g} {source_name}->{dest_name}")
+    return ToolResult(True, f"[OK] Transferred {amount:g} {source_name}->{dest_name}")
 
   def reset_all(self) -> ToolResult:
     self.accounts.update_by_text("", {"balance": 0}, "name") # Hacky match all?
@@ -218,7 +218,7 @@ class FinanceTool(BaseTool):
     for a in all_accts:
       self.accounts.update(a['id'], {"balance": 0})
     self.transactions.delete_all()
-    return ToolResult(True, "✓ System Reset: Money 0")
+    return ToolResult(True, "[OK] System Reset: Money 0")
 
   def bulk_delete(self, params: Dict) -> ToolResult:
     names = params.get("names", [])
@@ -229,7 +229,7 @@ class FinanceTool(BaseTool):
       if accts:
         self.accounts.delete(accts[0]['id'])
         count += 1
-    return ToolResult(True, f"✓ Deleted {count} accounts.")
+    return ToolResult(True, f"[OK] Deleted {count} accounts.")
 
   def update_balance(self, params: Dict) -> ToolResult:
     name = params.get("name")
@@ -238,7 +238,7 @@ class FinanceTool(BaseTool):
     if not accts: return ToolResult(False, "Account not found.")
     self.accounts.update(accts[0]['id'], {"balance": amt})
     self.accounts.update(accts[0]['id'], {"balance": amt})
-    return ToolResult(True, f"✓ Set {name} to {amt:g}")
+    return ToolResult(True, f"[OK] Set {name} to {amt:g}")
 
   def get_history(self, params: Dict) -> ToolResult:
     # return transactions

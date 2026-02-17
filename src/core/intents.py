@@ -385,48 +385,42 @@ class IntentRouter:
     }
 
   def _parse_account_add(self, text):
-    """Parse account add command"""
-    amount, remaining = self.parser.parse_hinglish_amount(text)
+    """Parse account add command
+    
+    Supports:
+    - account add <name> <amount>
+    - account add <name> (defaults to 0)
+    - add account <name> <amount>
+    - add account <name>
+    """
+    # 1. Try to find a number at the end or beginning
+    amount, remaining_text = self.parser.parse_hinglish_amount(text)
+    
+    # If no valid amount found, default to 0
+    if amount is None or amount < 0:
+      amount = 0.0
+      
+    # The name is whatever is left after extracting the amount
+    name = remaining_text.strip()
+    
+    # Special handling: if "account" or "add" are still in the name (e.g. from "add account axis")
+    # Clean up common prefixes if they weren't stripped by the caller
+    for prefix in ['add ', 'account ']:
+        if name.lower().startswith(prefix):
+            name = name[len(prefix):].strip()
 
-    if amount is not None and amount >= 0:
-      account_name = remaining.strip()
-      if not account_name:
-        return {
-          'intent': 'error',
-          'params': {
-            'message': 'Account name is required'
-          }
-        }
-
-      return {
-        'intent': 'add_account',
-        'params': {
-          'name': account_name,
-          'opening_balance': amount
-        }
-      }
-    else:
-      # Try parsing as: account add <name> <amount>
-      parts = text.split(maxsplit=1)
-      if len(parts) >= 1:
-        name = parts[0]
-        balance = 0
-        if len(parts) == 2:
-          amount, _ = self.parser.parse_hinglish_amount(parts[1])
-          if amount is not None and amount >= 0:
-            balance = amount
-
-        return {
-          'intent': 'add_account',
-          'params': {
-            'name': name,
-            'opening_balance': balance
-          }
-        }
-
+    if not name:
       return {
         'intent': 'error',
         'params': {
-          'message': f"Invalid account add command: '{text}'"
+          'message': 'Account name is required (e.g., "add account savings")'
         }
       }
+
+    return {
+      'intent': 'add_account',
+      'params': {
+        'name': name,
+        'opening_balance': amount
+      }
+    }

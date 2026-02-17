@@ -25,7 +25,8 @@ class ToneMode(Enum):
   RIDE = "ride"              # Short, quick responses
   DESKTOP = "desktop"        # Detailed explanations
   FORMAL = "formal"          # For work/boss contexts
-
+  EMPATHETIC = "empathetic"  # For sad/distressed user
+  BRAINSTORM = "brainstorm"  # For generating ideas
 
 @dataclass
 class ToneConfig:
@@ -34,8 +35,7 @@ class ToneConfig:
   max_length: int            # chars limit (0 = no limit)
   use_emoji: bool
   use_bullets: bool
-  greeting_style: str        # casual, friendly, formal
-
+  greeting_style: str        # casual, friendly, formal, soft
 
 # Tone presets
 TONE_PRESETS: Dict[ToneMode, ToneConfig] = {
@@ -78,6 +78,22 @@ TONE_PRESETS: Dict[ToneMode, ToneConfig] = {
     use_emoji=False,
     use_bullets=True,
     greeting_style="formal"
+  ),
+  ToneMode.EMPATHETIC: ToneConfig(
+    mode=ToneMode.EMPATHETIC,
+    hinglish_ratio=0.2,
+    max_length=0,
+    use_emoji=False, # Minimize emojis in serious moments
+    use_bullets=False,
+    greeting_style="soft"
+  ),
+  ToneMode.BRAINSTORM: ToneConfig(
+    mode=ToneMode.BRAINSTORM,
+    hinglish_ratio=0.4,
+    max_length=0,
+    use_emoji=True,
+    use_bullets=True,
+    greeting_style="casual"
   )
 }
 
@@ -85,17 +101,16 @@ TONE_PRESETS: Dict[ToneMode, ToneConfig] = {
 class PersonaTone:
   """
   Context-aware tone manager for TAPAN_AI responses.
-
-  Adapts response style based on:
-  - Query type (decision, casual, urgent)
-  - Time of day
-  - User's current stress/energy
-  - Explicit mode request
   """
 
   def __init__(self):
     self.current_mode = ToneMode.FRIENDLY
     self._explicit_override = False
+    try:
+        from src.agent.sentiment import SentimentEngine
+        self.sentiment_engine = SentimentEngine()
+    except ImportError:
+        self.sentiment_engine = None
 
   # =====================================
   # HINGLISH PHRASES
@@ -105,6 +120,7 @@ class PersonaTone:
     "casual": ["Haan bhai!", "Bol yaar", "Kya scene hai", "Batao batao"],
     "friendly": ["Hey!", "Alright", "Haan ji", "Sure thing"],
     "formal": ["Hello", "Yes", "Certainly", "Of course"],
+    "soft": ["Hey...", "Sun...", "Main hoon na,", "Take it easy,"],
     "none": []
   }
 
@@ -169,6 +185,11 @@ class PersonaTone:
     "professional", "formal"
   ]
 
+  BRAINSTORM_KEYWORDS = [
+    "idea", "brainstorm", "suggest", "creative", "think of",
+    "kuch naya", "socho", "innovation"
+  ]
+
   def detect_mode(self, query: str, stress_level: int = 3, 
           is_mobile: bool = False) -> ToneMode:
     """Detect appropriate tone mode from query and context"""
@@ -186,6 +207,8 @@ class PersonaTone:
       return ToneMode.DESKTOP
     if "formal" in query_lower or any(k in query_lower for k in self.FORMAL_KEYWORDS):
       return ToneMode.FORMAL
+    if any(k in query_lower for k in self.BRAINSTORM_KEYWORDS):
+        return ToneMode.BRAINSTORM
 
     # Decision queries
     if any(k in query_lower for k in self.DECISION_KEYWORDS):
@@ -195,7 +218,13 @@ class PersonaTone:
     if any(k in query_lower for k in self.RIDE_KEYWORDS):
       return ToneMode.RIDE
 
-    # High stress = shorter responses
+    # Sentiment check for Empathetic mode
+    if self.sentiment_engine:
+        analysis = self.sentiment_engine.analyze(query)
+        if analysis["label"] in ["sad", "depressed", "stressed"]:
+            return ToneMode.EMPATHETIC
+
+    # High stress = shorter responses (if not caught by sentiment)
     if stress_level >= 7:
       return ToneMode.RIDE
 
@@ -304,7 +333,7 @@ class PersonaTone:
         result = f"{greeting} {result}"
 
     # Add ending
-    if add_ending and mode not in [ToneMode.RIDE, ToneMode.FORMAL]:
+    if add_ending and mode not in [ToneMode.RIDE, ToneMode.FORMAL, ToneMode.EMPATHETIC]:
       result = f"{result}\n\n{self.get_ending()}"
 
     # Truncate for ride mode

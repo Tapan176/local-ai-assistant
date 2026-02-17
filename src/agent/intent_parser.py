@@ -74,10 +74,11 @@ class IntentParser:
 
     # === FINANCE ===
 
-    # Add Account: "add account savings 1000"
-    match = re.search(r'add\s+account\s+(\w+)\s+(\d+(?:\.\d+)?)', text_lower)
+    # Add Account: "add account savings 1000" or "add account savings"
+    match = re.search(r'add\s+account\s+(\w+)(?:\s+(\d+(?:\.\d+)?))?', text_lower)
     if match:
-      return {"tool": "finance", "method": "add_account", "params": {"name": match.group(1), "opening_balance": float(match.group(2))}, "confidence": 1.0}
+      amount = float(match.group(2)) if match.group(2) else 0.0
+      return {"tool": "finance", "method": "add_account", "params": {"name": match.group(1), "opening_balance": amount}, "confidence": 1.0}
 
     # Expense: "expense 500 food [lunch]"
     match = re.search(r'expense\s+(\d+(?:\.\d+)?)\s+(\w+)(?:\s+(.*))?', text_lower)
@@ -109,8 +110,9 @@ class IntentParser:
         "confidence": 1.0
       }
 
-    # Balance / Show Accounts
-    if "balance" in text_lower or (("list" in text_lower or "show" in text_lower) and "account" in text_lower):
+    # Balance / Show Accounts  - Make more specific
+    if re.search(r'(?:^|\s)balance(?:\s|$)', text_lower) or \
+       (re.search(r'(?:^|\s)(?:list|show)\s+(?:all\s+)?accounts?(?:\s|$)', text_lower)):
       return {"tool": "finance", "method": "accounts", "params": {}, "confidence": 1.0}
 
     # Delete Account
@@ -161,8 +163,8 @@ class IntentParser:
     if match:
       return {"tool": "memory", "method": "remember", "params": {"text": match.group(1)}, "confidence": 1.0}
 
-    # List Memories
-    if ("list" in text_lower or "show" in text_lower) and "memor" in text_lower:
+    # List Memories - Make more specific to avoid false positives
+    if re.search(r'(?:^|\s)(?:list|show)\s+(?:all\s+)?memories?(?:\s|$)', text_lower):
       return {"tool": "memory", "method": "list", "params": {}, "confidence": 1.0}
 
     # === COGNEE (Semantic Memory) ===
@@ -192,7 +194,7 @@ class IntentParser:
     if match:
       return {"tool": "reminder", "method": "add", "params": {"text": match.group(1)}, "confidence": 1.0}
 
-    if ("list" in text_lower or "show" in text_lower) and "reminder" in text_lower:
+    if re.search(r'(?:^|\s)(?:list|show)\s+(?:all\s+)?reminders?(?:\s|$)', text_lower):
       return {"tool": "reminder", "method": "list", "params": {}, "confidence": 1.0}
 
     # === EXPERIENCE ===
@@ -209,7 +211,8 @@ class IntentParser:
     if "stats" in text_lower:
       return {"tool": "experience", "method": "stats", "params": {}, "confidence": 1.0}
 
-    if "experience" in text_lower and ("list" in text_lower or "show" in text_lower):
+    if re.search(r'(?:^|\s)(?:list|show)\s+(?:all\s+)?experiences?(?:\s|$)', text_lower) or \
+       re.search(r'(?:^|\s)(?:list|show)\s+(?:all\s+)?(?:activities|activity|logs|journeys)(?:\s|$)', text_lower):
       return {"tool": "experience", "method": "list", "params": {}, "confidence": 1.0}
 
     # === RELATION ===

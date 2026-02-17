@@ -73,14 +73,22 @@ class MemoryTool(BaseTool):
       km = KnowledgeManager(kb_path, self.data_dir)
       km.ingest_from_memory([(text, "")])
     except Exception:
-      pass  # SQLite save succeeded, indexing failure is non-critical
+      pass
 
-    return ToolResult(True, f"✓ Remembered: {text}")
+    # Save to Semantic Memory (Vector Store)
+    try:
+      from src.agent.semantic_memory import SemanticMemory
+      sm = SemanticMemory(self.data_dir)
+      sm.remember(text, {"category": params.get("category", "fact"), "tags": params.get("tags", "")})
+    except Exception as e:
+      print(f"[MemoryTool] Semantic save failed: {e}")
+
+    return ToolResult(True, f"[OK] Remembered: {text}")
 
   def list_memories(self) -> ToolResult:
     items = self.repo.list(limit=50)
     if not items: return ToolResult(True, "No memories yet.")
-    lines = ["🧠 Memories:"]
+    lines = ["[MEMORIES] Your Memories:"]
     for i in items:
       lines.append(f"- {i['text']} ({i.get('category')})")
     return ToolResult(True, "\n".join(lines))

@@ -61,11 +61,22 @@ class BitNetBackend:
       print(f"BitNet Config Error: {e}")
       self.ready = False
 
-  def generate(self, prompt: str, context: str = "", 
-         max_tokens: int = 512, temperature: float = 0.7) -> str:
-    """Generate response using subprocess CLI"""
+  def generate(self, prompt: str, context: str = "", **kwargs) -> str:
+    """Generate response using subprocess CLI
+
+    Args:
+      prompt: User prompt
+      context: Additional context
+      **kwargs: Additional options (max_tokens, temperature)
+
+    Returns:
+      Generated text
+    """
     if not self.ready:
       return "BitNet model not found or configured."
+
+    max_tokens = kwargs.get('max_tokens', 512)
+    temperature = kwargs.get('temperature', 0.7)
 
     full_prompt = prompt
     if context:
@@ -79,23 +90,23 @@ class BitNetBackend:
       "-n", str(max_tokens),
       "--temp", str(temperature),
       "-t", "4",  # threads
-      "--no-display-prompt", 
+      "--no-display-prompt",
       "--log-disable"
     ]
 
     try:
       # Run blocking inference
       result = subprocess.run(
-        cmd, 
-        capture_output=True, 
-        text=True, 
+        cmd,
+        capture_output=True,
+        text=True,
         encoding='utf-8',
         errors='ignore'
       )
-      
+
       if result.returncode != 0:
         return f"[BitNet Error: {result.stderr.strip()}]"
-        
+
       return result.stdout.strip()
 
     except Exception as e:

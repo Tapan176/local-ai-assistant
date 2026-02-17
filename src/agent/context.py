@@ -116,37 +116,55 @@ class ContextBuilder:
     except Exception as e:
       return {"error": str(e)}
 
-  def get_memories_snapshot(self, query: str = "") -> List[Dict]:
-    """Get relevant memories"""
-    memory_db = self.data_dir / "memory.db"
-    if not memory_db.exists():
-      return []
 
+  def get_memories_snapshot(self, query: str = "") -> List[Dict]:
+    """Get relevant memories using Semantic Search or SQLite fallback."""
     try:
+      # Try Semantic Search first
+      # Lazy import to avoid circular dependency if any
+      from src.agent.semantic_memory import SemanticMemory
+      sm = SemanticMemory(self.data_dir)
+      
+      if query:
+        results = sm.search(query, limit=5, threshold=0.4)
+        if results:
+          return [{"text": r["text"], "category": "memory", "timestamp": r.get("timestamp")} for r in results]
+
+      # Fallback to SQLite (recent memories)
+      memory_db = self.data_dir / "memories.db" # Note: schema says "memories", tool says "memories.db"
+      if not memory_db.exists():
+         # Try singular if plural fails (legacy check)
+         memory_db = self.data_dir / "memory.db"
+         
+      if not memory_db.exists():
+        return []
+
       conn = sqlite3.connect(memory_db)
       cursor = conn.cursor()
 
       if query:
         cursor.execute("""
-          SELECT text, category, timestamp FROM memories
+          SELECT text, category, created_at FROM memories
           WHERE text LIKE ? OR category LIKE ?
-          ORDER BY timestamp DESC LIMIT 10
+          ORDER BY created_at DESC LIMIT 5
         """, (f"%{query}%", f"%{query}%"))
       else:
         cursor.execute("""
-          SELECT text, category, timestamp FROM memories
-          ORDER BY timestamp DESC LIMIT 10
+          SELECT text, category, created_at FROM memories
+          ORDER BY created_at DESC LIMIT 5
         """)
 
       memories = [
         {"text": r[0], "category": r[1], "timestamp": r[2]}
         for r in cursor.fetchall()
       ]
-
       conn.close()
       return memories
+
     except Exception as e:
+      print(f"[ContextBuilder] Memory fetch error: {e}")
       return []
+
 
   def get_reminders_snapshot(self) -> List[Dict]:
     """Get pending reminders from reminders.db"""

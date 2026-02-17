@@ -67,7 +67,7 @@ class RelationTool(BaseTool):
 
     self.repo.create({
       "name": name,
-      "relationship": params.get("relationship", "acquantance"),
+      "relationship": params.get("relationship", "acquaintance"),
       "notes": params.get("notes", "")
     })
     return ToolResult(True, f"Added relation: {name}")

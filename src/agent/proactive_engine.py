@@ -55,23 +55,23 @@ class ProactiveEngine:
       suggestions = self.get_suggestions()
 
     if not suggestions:
-      return "💡 No suggestions right now — sab sorted hai!"
+      return "[SUGGESTIONS] No suggestions right now — sab sorted hai!"
 
-    lines = ["💡 Proactive Suggestions:\n"]
+    lines = ["[SUGGESTIONS] Proactive Suggestions:\n"]
     emoji_map = {
-      "routine": "🔄",
-      "health": "🏃",
-      "finance": "💰",
-      "habit": "✅",
-      "reminder": "⏰",
-      "planning": "📋",
-      "wellness": "🧘",
+      "routine": "[ROUTINE]",
+      "health": "[HEALTH]",
+      "finance": "[FINANCE]",
+      "habit": "[HABIT]",
+      "reminder": "[REMINDER]",
+      "planning": "[PLANNING]",
+      "wellness": "[WELLNESS]",
     }
 
     for i, s in enumerate(suggestions, 1):
-      emoji = emoji_map.get(s.get("type", ""), "💡")
+      emoji = emoji_map.get(s.get("type", ""), "[INFO]")
       priority = s.get("priority", "low")
-      flag = "⚠️ " if priority == "high" else ""
+      flag = "[!] " if priority == "high" else ""
       lines.append(f"  {i}. {emoji} {flag}{s['message']}")
 
     return "\n".join(lines)
@@ -97,7 +97,7 @@ class ProactiveEngine:
       suggestions.append({
         "type": "wellness",
         "priority": "low",
-        "message": "Lunch break — stay hydrated aur stretch karo! 💧",
+        "message": "Lunch break — stay hydrated aur stretch karo!",
         "action": None
       })
 

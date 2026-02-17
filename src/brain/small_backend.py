@@ -38,15 +38,13 @@ class SmallBackend:
     self.model_path = model_path
     return False
 
-  def generate(self, prompt: str, context: str = "",
-         max_tokens: int = 256, temperature: float = 0.8) -> str:
+  def generate(self, prompt: str, context: str = "", **kwargs) -> str:
     """Generate quick response
 
     Args:
       prompt: User prompt
       context: Additional context
-      max_tokens: Maximum response length
-      temperature: Sampling temperature
+      **kwargs: Additional options (max_tokens, temperature, etc.) - ignored in SmallBackend
 
     Returns:
       Generated text
