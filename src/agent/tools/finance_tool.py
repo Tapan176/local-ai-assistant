@@ -55,7 +55,7 @@ class FinanceTool(BaseTool):
       "accounts", "add_account", "delete_account", "rename_account",
       "expense", "income", "transfer", "balance", 
       "reset_all_balances", "bulk_delete", "update_account_balance",
-      "get_account", "history", "categories"
+      "get_account", "history", "categories", "bulk_topup"
     ]
 
   def execute(self, action: str, params: Dict[str, Any]) -> ToolResult:
@@ -87,6 +87,8 @@ class FinanceTool(BaseTool):
         return self.get_history(params)
       if action == "categories":
         return self.get_categories(params)
+      if action == "bulk_topup":
+        return self.bulk_topup(params)
 
       return ToolResult(False, f"Unknown action: {action}")
     except Exception as e:
@@ -167,7 +169,24 @@ class FinanceTool(BaseTool):
     category = params.get("category", "misc")
 
     accts = self.accounts.list({"name": acct_name})
-    if not accts: return ToolResult(False, f"Account '{acct_name}' not found.")
+    if not accts and type_ == "income":
+      # Top-up flows should be resilient: auto-create destination account.
+      self.accounts.create({"name": acct_name, "balance": 0})
+      accts = self.accounts.list({"name": acct_name})
+
+    # Smarter default: if user didn't specify account for expense and default has low funds,
+    # charge the highest-balance account instead of driving default negative.
+    if type_ == "expense" and acct_name == "default" and accts:
+      default_account = accts[0]
+      if default_account.get('balance', 0) < amount:
+        candidates = [a for a in self.accounts.list(limit=1000) if a['name'] != 'default' and a.get('balance', 0) >= amount]
+        if candidates:
+          candidates.sort(key=lambda a: a.get('balance', 0), reverse=True)
+          acct_name = candidates[0]['name']
+          accts = [candidates[0]]
+
+    if not accts:
+      return ToolResult(False, f"Account '{acct_name}' not found.")
 
     acct = accts[0]
     new_bal = acct['balance'] - amount if type_ == "expense" else acct['balance'] + amount
@@ -239,6 +258,31 @@ class FinanceTool(BaseTool):
     self.accounts.update(accts[0]['id'], {"balance": amt})
     self.accounts.update(accts[0]['id'], {"balance": amt})
     return ToolResult(True, f"[OK] Set {name} to {amt:g}")
+
+  def bulk_topup(self, params: Dict) -> ToolResult:
+    entries = params.get("entries", [])
+    if not entries:
+      return ToolResult(False, "No top-up entries provided.")
+
+    applied = 0
+    lines = []
+    for entry in entries:
+      result = self.add_transaction({
+        "amount": entry.get("amount", 0),
+        "category": "topup",
+        "account": entry.get("account", "default"),
+        "note": "bulk topup"
+      }, "income")
+      if result.success:
+        applied += 1
+        lines.append(result.message)
+      else:
+        lines.append(f"[SKIP] {result.message}")
+
+    summary = f"[OK] Applied {applied}/{len(entries)} top-ups"
+    if lines:
+      summary += "\n" + "\n".join(lines)
+    return ToolResult(True, summary)
 
   def get_history(self, params: Dict) -> ToolResult:
     # return transactions

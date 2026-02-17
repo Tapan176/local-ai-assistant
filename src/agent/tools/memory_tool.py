@@ -33,7 +33,7 @@ class MemoryTool(BaseTool):
 
   @property
   def actions(self) -> list:
-    return ["remember", "delete_all", "delete_by_text", "list"]
+    return ["remember", "delete_all", "delete_by_text", "list", "last_time"]
 
   def execute(self, action: str, params: Dict[str, Any]) -> ToolResult:
     try:
@@ -46,6 +46,8 @@ class MemoryTool(BaseTool):
         return ToolResult(True, f"Forgot {count} memories.")
       if action == "delete_by_text":
         return self.delete_by_text(params)
+      if action == "last_time":
+        return self.last_time(params)
 
       return ToolResult(False, f"Unknown action: {action}")
     except Exception as e:
@@ -98,3 +100,31 @@ class MemoryTool(BaseTool):
     if not text: return ToolResult(False, "Text required.")
     count = self.repo.delete_by_text(text)
     return ToolResult(True, f"Deleted {count} memories matching '{text}'.")
+
+  def last_time(self, params: Dict) -> ToolResult:
+    query = (params.get("query") or "").lower()
+    if not query:
+      return ToolResult(False, "Query required.")
+
+    activity_match = None
+    import re
+    m = re.search(r"when\s+did\s+i\s+(.+?)\s+last\s+time", query)
+    if m:
+      activity_match = m.group(1).strip()
+    else:
+      activity_match = query
+
+    # Keep only useful tokens and search the memory text field.
+    stop_words = {"i", "did", "last", "time", "when", "to", "the", "a", "an", "ate"}
+    tokens = [t for t in re.findall(r"[a-zA-Z0-9]+", activity_match) if t not in stop_words]
+    needle = " ".join(tokens).strip() if tokens else activity_match
+
+    items = self.repo.search_by_text(needle, columns=["text"])
+    if not items:
+      return ToolResult(True, "I couldn't find a memory for that yet.")
+
+    # repo.list/search return DESC by id by default; first item is latest
+    latest = items[0]
+    memory_text = latest.get("text", "")
+    created_at = latest.get("created_at", "unknown time")
+    return ToolResult(True, f"Last time I saw this in memory: {created_at} — {memory_text}")
