@@ -31,6 +31,7 @@ _proactive_engine = None
 _perf_monitor = None
 _prediction_engine = None
 _smart_notifier = None
+_sentiment_engine = None
 
 
 def _get_context_builder(data_dir: Path):
@@ -148,10 +149,20 @@ def _get_smart_notifier(data_dir: Path):
   return _smart_notifier
 
 
+def _get_sentiment_engine():
+  global _sentiment_engine
+  if _sentiment_engine is None:
+    try:
+      from src.agent.sentiment import SentimentEngine
+      _sentiment_engine = SentimentEngine()
+    except Exception:
+      _sentiment_engine = None
+  return _sentiment_engine
+
+
 class Orchestrator:
   def __init__(self, data_dir: Path):
     self.data_dir = Path(data_dir)
-    self.data_dir.mkdir(parents=True, exist_ok=True)
     self.data_dir.mkdir(parents=True, exist_ok=True)
     self.intent_parser = IntentParser()
     self.semantic_parser = None  # Lazy init with LLM
@@ -395,6 +406,49 @@ class Orchestrator:
 
   # === LLM FALLBACK ===
 
+  @staticmethod
+  def _sentiment_guidance(label: str) -> str:
+    normalized = (label or "neutral").lower()
+    if normalized in {"sad", "angry", "stressed", "depressed"}:
+      return (
+        "User seems emotionally low or stressed. Respond with empathy first, "
+        "then provide practical help."
+      )
+    if normalized in {"happy", "excited"}:
+      return "User sounds positive. Match their energy while staying clear and useful."
+    return "Use a calm, warm, and concise companion tone."
+
+  def _build_companion_context(
+    self,
+    base_context: str,
+    sentiment_label: str,
+    recent_history: str,
+    memories: list,
+  ) -> str:
+    persona = (
+      "You are a personal AI companion with memory of past conversations. "
+      "Be friendly, conversational, and emotionally aware. "
+      "Use context from memories naturally, avoid sounding robotic, "
+      "and keep responses helpful and safe."
+    )
+
+    parts = [f"PERSONA:\n{persona}"]
+    parts.append(f"\nTONE_GUIDANCE:\n{self._sentiment_guidance(sentiment_label)}")
+
+    if recent_history:
+      parts.append(f"\nRECENT_CHAT:\n{recent_history}")
+
+    if memories:
+      memory_lines = [m.get("text", "") for m in memories if m.get("text")]
+      if memory_lines:
+        parts.append("\nRELEVANT_LONG_TERM_MEMORY:")
+        parts.extend(f"- {line}" for line in memory_lines[:5])
+
+    if base_context:
+      parts.append(f"\nSYSTEM_CONTEXT:\n{base_context}")
+
+    return "\n".join(parts)
+
   def _llm_fallback(self, text: str) -> str:
     """
     When no intent matches, use LLM with companion-oriented context.
@@ -411,6 +465,16 @@ class Orchestrator:
         recent_history = conv.get_recent_history(limit=4) if conv else ""
 
         sentiment_label = "neutral"
+        sentiment_engine = _get_sentiment_engine()
+        if sentiment_engine:
+          try:
+            sentiment_label = sentiment_engine.analyze(text).get("label", "neutral")
+          except Exception:
+            pass
+
+        relevant_memories = ctx.get_memories_snapshot(query=text) if ctx else []
+        context_str = self._build_companion_context(
+          base_context=base_context,
         try:
           from src.agent.sentiment import SentimentEngine
           sentiment_label = SentimentEngine().analyze(text).get("label", "neutral")

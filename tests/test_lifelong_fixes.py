@@ -3,6 +3,7 @@ from pathlib import Path
 from src.agent.conversation_manager import ConversationManager
 from src.agent.intent_parser import IntentParser
 from src.agent.tools.finance_tool import FinanceTool
+from src.agent.orchestrator import Orchestrator
 
 
 def test_conversation_manager_migrates_legacy_turns_schema(tmp_path: Path):
@@ -65,3 +66,21 @@ def test_finance_bulk_topup_autocreates_accounts(tmp_path: Path):
     accounts = {a["name"]: a["balance"] for a in tool.accounts.list(limit=10)}
     assert accounts["axis"] == 400
     assert accounts["sbi"] == 25000
+
+
+def test_orchestrator_companion_context_is_compact_and_structured(tmp_path: Path):
+    orchestrator = Orchestrator(tmp_path)
+
+    context = orchestrator._build_companion_context(
+        base_context="BASE",
+        sentiment_label="stressed",
+        recent_history="User: I am overwhelmed",
+        memories=[{"text": "User prefers evening workouts"}],
+    )
+
+    assert "PERSONA:" in context
+    assert "TONE_GUIDANCE:" in context
+    assert "emotionally low or stressed" in context
+    assert "RECENT_CHAT:" in context
+    assert "RELEVANT_LONG_TERM_MEMORY:" in context
+    assert "SYSTEM_CONTEXT:\nBASE" in context
