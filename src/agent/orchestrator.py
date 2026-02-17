@@ -18,6 +18,7 @@ from src.agent.tools.reminder_tool import ReminderTool
 from src.agent.tools.relation_tool import RelationTool
 from src.agent.tools.cognee_tool import CogneeTool
 from src.agent.memory_router import MemoryRouter
+from src.agent.companion_prompt import build_companion_context
 
 # Context & Intelligence modules (lazy-loaded to avoid circular imports)
 _context_builder = None
@@ -396,18 +397,35 @@ class Orchestrator:
 
   def _llm_fallback(self, text: str) -> str:
     """
-    When no intent matches, use LLM with full context.
-    If no LLM available, save as memory.
+    When no intent matches, use LLM with companion-oriented context.
+    If no LLM is available, fall back to memory capture/help text.
     """
     llm = _get_llm(self.data_dir)
 
     if llm:
       try:
-        # Build context from all data sources
         ctx = _get_context_builder(self.data_dir)
-        context_str = ctx.build_full_context() if ctx else ""
+        base_context = ctx.build_full_context() if ctx else ""
 
-        # Generate LLM response
+        conv = self._get_conversation_mgr()
+        recent_history = conv.get_recent_history(limit=4) if conv else ""
+
+        sentiment_label = "neutral"
+        try:
+          from src.agent.sentiment import SentimentEngine
+          sentiment_label = SentimentEngine().analyze(text).get("label", "neutral")
+        except Exception:
+          pass
+
+        relevant_memories = ctx.get_memories_snapshot(query=text) if ctx else []
+
+        context_str = build_companion_context(
+          base_context,
+          sentiment_label=sentiment_label,
+          recent_history=recent_history,
+          memories=relevant_memories,
+        )
+
         response = llm.generate(text, context=context_str)
         if response and not response.startswith("(placeholder)"):
           return self._format_response(response)
