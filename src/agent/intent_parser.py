@@ -100,6 +100,28 @@ class IntentParser:
         "confidence": 1.0
       }
 
+    # Quick top-up: "add 400 to axis" / "add 35000 in sbi"
+    match = re.search(r'^add\s+(\d+(?:\.\d+)?)\s+(?:to|in)\s+(\w+)$', text_lower)
+    if match:
+      return {
+        "tool": "finance",
+        "method": "income",
+        "params": {"amount": float(match.group(1)), "category": "topup", "account": match.group(2), "note": "manual topup"},
+        "confidence": 0.95
+      }
+
+    # Multi top-up: "add 400 to axis and 25000 to sbi"
+    match = re.search(r'^add\s+(.+)$', text_lower)
+    if match and ' and ' in text_lower and ' to ' in text_lower:
+      pairs = re.findall(r'(\d+(?:\.\d+)?)\s+to\s+(\w+)', text_lower)
+      if pairs:
+        return {
+          "tool": "finance",
+          "method": "bulk_topup",
+          "params": {"entries": [{"amount": float(a), "account": n} for a, n in pairs]},
+          "confidence": 0.9
+        }
+
     # Transfer: "transfer 500 from A to B"
     match = re.search(r'transfer\s+(\d+(?:\.\d+)?)\s+from\s+(\w+)\s+to\s+(\w+)', text_lower)
     if match:
@@ -150,6 +172,16 @@ class IntentParser:
           "params": {"query": text, "amount": amount},
           "confidence": 0.9
         }
+
+    # Investment opportunity/advice queries should route to decision engine, not planner.
+    if re.search(r'\binvest(?:ment)?\b', text_lower) and any(k in text_lower for k in ["suggest", "opportunity", "advice", "idea"]):
+      amt_match = re.search(r'(\d{3,})', text_lower)
+      amount = float(amt_match.group(1)) if amt_match else None
+      return {
+        "tool": "decision", "method": "evaluate",
+        "params": {"query": text, "amount": amount},
+        "confidence": 0.9
+      }
 
     # === PLANNING ===
     for kw in PLANNING_KEYWORDS:
@@ -225,6 +257,10 @@ class IntentParser:
     if match:
       return {"tool": "experience", "method": "sum", "params": {"place": match.group(1).rstrip("?")}, "confidence": 1.0}
 
+    match = re.search(r'^when\s+did\s+i\s+(.+?)\s+last\s+time\??$', text_lower)
+    if match:
+      return {"tool": "memory", "method": "last_time", "params": {"query": text}, "confidence": 0.9}
+
     match = re.search(r'when\s+last\s+(?:did\s+i\s+)?(.+)', text_lower)
     if match:
        # Extract activity
@@ -232,8 +268,6 @@ class IntentParser:
        # remove "go" or "went"
        activity = re.sub(r'^(go\s+|went\s+to\s+|went\s+)', '', activity)
        return {"tool": "experience", "method": "list", "params": {"text": activity, "limit": 1}, "confidence": 1.0}
-
-    match = re.search(r'add\s+relation\s+(\w+)', text_lower)
 
     match = re.search(r'add\s+relation\s+(\w+)', text_lower)
     if match:
