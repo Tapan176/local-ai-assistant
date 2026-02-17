@@ -96,6 +96,10 @@ class BackgroundService:
           source = "text"
 
         if text:
+          if source == "system":
+            print(f"\n[VOICE-SYSTEM]: {text}")
+            continue
+
           source_marker = "[Voice] " if source == "voice" else ""
           print(f"\n[YOU {source_marker}]: {text}")
           response = self.orch.process(text, source=source)

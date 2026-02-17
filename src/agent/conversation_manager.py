@@ -63,6 +63,24 @@ class ConversationManager:
                 sentiment_label TEXT
             )
         """)
+
+        # Backward-compatible migration for existing installs.
+        # Old databases may have been created before sentiment/source/topic columns.
+        existing_cols = {
+            row[1]
+            for row in cursor.execute("PRAGMA table_info(turns)").fetchall()
+        }
+        required_columns = {
+            "source": "TEXT DEFAULT 'text'",
+            "topic": "TEXT",
+            "sentiment_valence": "REAL DEFAULT 0.0",
+            "sentiment_arousal": "REAL DEFAULT 0.0",
+            "sentiment_label": "TEXT DEFAULT 'neutral'",
+        }
+        for column_name, column_def in required_columns.items():
+            if column_name not in existing_cols:
+                cursor.execute(f"ALTER TABLE turns ADD COLUMN {column_name} {column_def}")
+
         conn.commit()
         conn.close()
     except Exception as e:
@@ -76,7 +94,8 @@ class ConversationManager:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT timestamp, user_input, assistant_response, intent, entities, source, topic 
+            SELECT timestamp, user_input, assistant_response, intent, entities, source, topic,
+                   sentiment_valence, sentiment_arousal, sentiment_label
             FROM turns ORDER BY id DESC LIMIT ?
         """, (self.max_history,))
         
@@ -92,7 +111,12 @@ class ConversationManager:
                 "intent": row[3],
                 "entities": json.loads(row[4]) if row[4] else {},
                 "source": row[5] or "text",
-                "topic": row[6]
+                "topic": row[6],
+                "sentiment": {
+                    "valence": row[7] if row[7] is not None else 0.0,
+                    "arousal": row[8] if row[8] is not None else 0.0,
+                    "label": row[9] or "neutral",
+                },
             }
             self.turns.append(turn)
             

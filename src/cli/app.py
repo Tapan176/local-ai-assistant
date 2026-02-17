@@ -34,7 +34,7 @@ def main():
             from src.io.voice_interface import VoiceInterface
             print("[INFO] Initializing Voice Interface...")
             # Wake word 'jarvis' or 'tapan'
-            voice = VoiceInterface(wake_word="jarvis")
+            voice = VoiceInterface(wake_word="jarvis", data_dir=data_dir, strict_user="--voice-strict" in sys.argv)
         except Exception as e:
             print(f"[WARNING] Voice Init Failed: {e}")
 
