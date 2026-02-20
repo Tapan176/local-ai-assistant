@@ -35,14 +35,23 @@ class BitNetBackend:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout = timeout
-        self.mode = mode.lower().strip()
+        self.mode = self._normalize_mode(mode)
         self.cpp_executable = cpp_executable
         self.cpp_model_path = cpp_model_path
         self.cpp_max_tokens = cpp_max_tokens
         self.cpp_threads = cpp_threads
         self.cpp_ctx_size = cpp_ctx_size
         self.cpp_extra_args = cpp_extra_args or []
+        self._autodetect_cpp_paths_if_missing()
         self._available: bool | None = None
+
+    def _service_base_urls(self) -> list[str]:
+        """Try configured URL first, then legacy local default."""
+        urls = [self.base_url]
+        legacy_default = "http://localhost:11435"
+        if legacy_default not in urls:
+            urls.append(legacy_default)
+        return urls
 
     async def check_health(self) -> bool:
         """Check if configured BitNet backend is available."""
@@ -53,15 +62,16 @@ class BitNetBackend:
             self._available = False
             return False
 
-        # Service health check
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(f"{self.base_url}/health")
-                if response.status_code == 200:
-                    self._available = True
-                    return True
-        except Exception:
-            pass
+        # Service health check (configured URL + legacy default URL).
+        for service_base_url in self._service_base_urls():
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    response = await client.get(f"{service_base_url}/health")
+                    if response.status_code == 200:
+                        self._available = True
+                        return True
+            except Exception:
+                continue
         self._available = False
         return False
 
@@ -92,40 +102,30 @@ class BitNetBackend:
                 return None
 
         # 2) Try service backend.
-        if not await self.check_health():
-            logger.warning("BitNet service unavailable")
-            return None
+        for service_base_url in self._service_base_urls():
+            service_output = await self._generate_service_openai(
+                service_base_url=service_base_url,
+                system=system,
+                context=context,
+                user=user,
+                temperature=temperature,
+                json_mode=json_mode,
+            )
+            if service_output:
+                self._available = True
+                return service_output
 
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "system", "content": context},
-                {"role": "user", "content": user},
-            ],
-            "temperature": temperature,
-            "stream": False,
-        }
-        if json_mode:
-            payload["response_format"] = {"type": "json_object"}
+            legacy_output = await self._generate_service_legacy(
+                service_base_url=service_base_url,
+                user=user,
+                system=system,
+            )
+            if legacy_output:
+                self._available = True
+                return legacy_output
 
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.base_url}/v1/chat/completions",
-                    json=payload,
-                )
-                response.raise_for_status()
-                data = response.json()
-                content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                if content:
-                    logger.info("BitNet model %s responded successfully", self.model)
-                    return str(content).strip()
-        except httpx.TimeoutException:
-            logger.warning("BitNet model %s timed out after %ss", self.model, self.timeout)
-        except Exception as exc:
-            logger.warning("BitNet model %s failed: %s", self.model, exc)
-            self._available = False
+        logger.warning("BitNet service unavailable")
+        self._available = False
         return None
 
     async def stream_generate(
@@ -147,6 +147,7 @@ class BitNetBackend:
         if not await self.check_health():
             return
 
+        service_base_url = self._service_base_urls()[0]
         payload = {
             "model": self.model,
             "messages": [
@@ -162,7 +163,7 @@ class BitNetBackend:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 async with client.stream(
                     "POST",
-                    f"{self.base_url}/v1/chat/completions",
+                    f"{service_base_url}/v1/chat/completions",
                     json=payload,
                 ) as response:
                     response.raise_for_status()
@@ -187,12 +188,137 @@ class BitNetBackend:
         """Check if backend is available (cached)."""
         return self._available is True
 
+    @staticmethod
+    def _normalize_mode(mode: str) -> str:
+        value = (mode or "auto").lower().strip()
+        if value == "local":
+            return "cpp"
+        if value == "http":
+            return "service"
+        if value not in {"auto", "cpp", "service"}:
+            return "auto"
+        return value
+
+    def _autodetect_cpp_paths_if_missing(self) -> None:
+        """Restore legacy behavior: detect bitnet/bin and bitnet/models automatically."""
+        if self.cpp_executable and self.cpp_model_path:
+            return
+
+        project_root = Path(__file__).resolve().parents[2]
+        bitnet_dir = project_root / "bitnet"
+        bin_dir = bitnet_dir / "bin"
+        models_dir = bitnet_dir / "models"
+        model_search_roots = [models_dir, bitnet_dir]
+        binary_search_roots = [bin_dir, bitnet_dir]
+
+        if not self.cpp_executable:
+            candidates = [
+                "llama-cli.exe",
+                "main.exe",
+                "llama-server.exe",
+                "llama-cli",
+                "main",
+                "llama-server",
+            ]
+            for root in binary_search_roots:
+                if not root.exists():
+                    continue
+                for name in candidates:
+                    candidate = root / name
+                    if candidate.exists():
+                        self.cpp_executable = str(candidate)
+                        break
+                if self.cpp_executable:
+                    break
+            if not self.cpp_executable and bitnet_dir.exists():
+                for candidate in bitnet_dir.rglob("*"):
+                    if candidate.is_file() and candidate.name in candidates:
+                        self.cpp_executable = str(candidate)
+                        break
+
+        if not self.cpp_model_path:
+            for root in model_search_roots:
+                if not root.exists():
+                    continue
+                preferred = sorted(root.glob("**/*bitnet*.gguf")) + sorted(root.glob("**/*1.58*.gguf"))
+                if preferred:
+                    self.cpp_model_path = str(preferred[0])
+                    break
+
+                tiny = root / "tinyllama.gguf"
+                if tiny.exists():
+                    self.cpp_model_path = str(tiny)
+                    break
+
+                ggufs = sorted(root.glob("**/*.gguf"))
+                if ggufs:
+                    self.cpp_model_path = str(ggufs[0])
+                    break
+
     def _check_cpp_health(self) -> bool:
         if not self.cpp_executable or not self.cpp_model_path:
             return False
         exe = Path(self.cpp_executable)
         model = Path(self.cpp_model_path)
         return exe.exists() and model.exists()
+
+    async def _generate_service_openai(
+        self,
+        *,
+        service_base_url: str,
+        system: str,
+        context: str,
+        user: str,
+        temperature: float,
+        json_mode: bool,
+    ) -> str | None:
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "system", "content": context},
+                {"role": "user", "content": user},
+            ],
+            "temperature": temperature,
+            "stream": False,
+        }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    f"{service_base_url}/v1/chat/completions",
+                    json=payload,
+                )
+                response.raise_for_status()
+                data = response.json()
+                content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                if content:
+                    logger.info("BitNet model %s responded successfully at %s", self.model, service_base_url)
+                    return str(content).strip()
+        except httpx.TimeoutException:
+            logger.warning("BitNet model %s timed out after %ss at %s", self.model, self.timeout, service_base_url)
+        except Exception as exc:
+            logger.warning("BitNet OpenAI endpoint failed at %s: %s", service_base_url, exc)
+            self._available = False
+        return None
+
+    async def _generate_service_legacy(self, *, service_base_url: str, user: str, system: str = "") -> str | None:
+        """Compatibility with older BitNet service API: POST /generate."""
+        payload = {"prompt": user, "system": system, "stream": False}
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(f"{service_base_url}/generate", json=payload)
+                response.raise_for_status()
+                data = response.json()
+                text = data.get("response") or data.get("text") or ""
+                if text:
+                    logger.info("BitNet legacy endpoint responded successfully at %s", service_base_url)
+                    return str(text).strip()
+        except Exception as exc:
+            logger.warning("BitNet legacy endpoint failed at %s: %s", service_base_url, exc)
+        return None
 
     async def _generate_cpp(
         self,
@@ -222,6 +348,7 @@ class BitNetBackend:
             str(self.cpp_max_tokens),
             "--temp",
             str(temperature),
+            "--no-display-prompt",
         ]
         if self.cpp_threads > 0:
             command.extend(["-t", str(self.cpp_threads)])

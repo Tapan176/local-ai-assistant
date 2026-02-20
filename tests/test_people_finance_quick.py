@@ -1,19 +1,31 @@
 """Quick test for people and finance tool enhancements."""
-import asyncio
-from src.tools.people_tool import PeopleTool
-from src.tools.finance_tool import FinanceTool
-from src.storage.sqlite_store import SQLiteStore
+
+from __future__ import annotations
+
+import pytest
+
+from src.models import MemoryContext, ReasoningOutput
 from src.storage.graph_store import GraphStore
-from src.models import ReasoningOutput, MemoryContext
+from src.storage.sqlite_store import SQLiteStore
+from src.tools.finance_tool import FinanceTool
+from src.tools.people_tool import PeopleTool
+
+pytestmark = pytest.mark.anyio
 
 
-async def test():
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
+
+
+async def test_people_and_finance_quick() -> None:
     store = SQLiteStore(":memory:")
     await store.initialize()
     graph = GraphStore(store)
-    pt = PeopleTool(store, graph)
-    ft = FinanceTool(store)
-    ro = ReasoningOutput(
+    people_tool = PeopleTool(store, graph)
+    finance_tool = FinanceTool(store)
+
+    people_reasoning = ReasoningOutput(
         inferred_intent="people_memory_update",
         confidence=0.9,
         needs_clarification=False,
@@ -22,15 +34,15 @@ async def test():
         uncertainty=0.1,
         rationale="",
     )
-    mem = MemoryContext()
+    memory = MemoryContext()
 
-    r1 = await pt.execute("s1", "add a friend roy who has a joyful nature", ro, mem)
-    print("People add friend:", r1.success, r1.output_text[:60] if r1.output_text else "")
+    add_person = await people_tool.execute("s1", "add a friend roy who has a joyful nature", people_reasoning, memory)
+    assert add_person.success, add_person.output_text
 
-    r2 = await pt.execute("s1", "name ROY relation friend", ro, mem)
-    print("People name relation:", r2.success, r2.output_text[:60] if r2.output_text else "")
+    set_relation = await people_tool.execute("s1", "name ROY relation friend", people_reasoning, memory)
+    assert set_relation.success, set_relation.output_text
 
-    ro2 = ReasoningOutput(
+    finance_reasoning = ReasoningOutput(
         inferred_intent="financial_update",
         confidence=0.9,
         needs_clarification=False,
@@ -39,9 +51,5 @@ async def test():
         uncertainty=0.1,
         rationale="",
     )
-    r3 = await ft.execute("s1", "add one account axis with 400 balance", ro2, mem)
-    print("Finance add one account:", r3.success, r3.output_text[:70] if r3.output_text else "")
-
-
-if __name__ == "__main__":
-    asyncio.run(test())
+    add_account = await finance_tool.execute("s1", "add one account axis with 400 balance", finance_reasoning, memory)
+    assert add_account.success, add_account.output_text

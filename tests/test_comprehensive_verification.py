@@ -10,6 +10,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config.settings import Settings
@@ -39,9 +41,12 @@ from src.core.proactive_engine import ProactiveEngine
 from src.core.performance_monitor import PerformanceMonitor
 from src.llm.prompt_builder import PromptBuilder
 
+pytestmark = pytest.mark.anyio
+
 
 class TestResults:
     """Track test results."""
+    __test__ = False
     
     def __init__(self):
         self.passed = 0
@@ -70,6 +75,16 @@ class TestResults:
             print("\nErrors:")
             for err in self.errors:
                 print(f"  - {err}")
+
+
+@pytest.fixture
+def results() -> TestResults:
+    return TestResults()
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
 
 
 async def test_finance_tool_comprehensive(results: TestResults):
@@ -212,6 +227,8 @@ async def test_finance_tool_comprehensive(results: TestResults):
     except Exception as e:
         results.record("Finance: Delete Account", False, str(e))
 
+    assert results.failed == 0, "; ".join(results.errors)
+
 
 async def test_reasoning_intent_detection(results: TestResults):
     """Test reasoning and intent detection layer."""
@@ -255,6 +272,8 @@ async def test_reasoning_intent_detection(results: TestResults):
             results.record(f"Intent: '{user_text[:30]}'", passed, error)
         except Exception as e:
             results.record(f"Intent: '{user_text[:30]}'", False, str(e))
+
+    assert results.failed == 0, "; ".join(results.errors)
 
 
 async def test_tool_registry(results: TestResults):
@@ -308,6 +327,8 @@ async def test_tool_registry(results: TestResults):
         results.record("Tool Registry: Execute Finance Tool", result.success)
     except Exception as e:
         results.record("Tool Registry: Execute Finance Tool", False, str(e))
+
+    assert results.failed == 0, "; ".join(results.errors)
 
 
 async def test_memory_system(results: TestResults):
@@ -366,6 +387,8 @@ async def test_memory_system(results: TestResults):
     except Exception as e:
         results.record("Memory: Retriever Integration", False, str(e))
 
+    assert results.failed == 0, "; ".join(results.errors)
+
 
 async def test_end_to_end_pipeline(results: TestResults):
     """Test end-to-end pipeline."""
@@ -402,6 +425,8 @@ async def test_end_to_end_pipeline(results: TestResults):
                 results.record(f"E2E: '{user_input[:40]}'", False, str(e))
     except Exception as e:
         results.record("E2E: Pipeline Setup", False, str(e))
+
+    assert results.failed == 0, "; ".join(results.errors)
 
 
 async def main():
