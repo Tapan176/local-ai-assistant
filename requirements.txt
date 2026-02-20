@@ -1,24 +1,26 @@
-# Core dependencies
-python-dateutil
-dateparser
-pydantic
-rich
-pytest
-schedule
-
-# Optional: Cognee + Neo4j (for semantic/graph memory)
-# Uncomment if using CogneeTool features:
-# cognee
-# neo4j
-speechrecognition
-pyttsx3
-protego>=0.1
-playwright>=1.9.0
-
-# TAPAN_AI v2 stack
+pydantic>=2.7.0
 fastapi>=0.111.0
 uvicorn>=0.30.0
 httpx>=0.27.0
 PyYAML>=6.0.0
+python-dotenv>=1.0.0
+
+# Local AI backends
 chromadb>=0.5.0
-openai>=1.40.0
+dateparser>=1.2.0
+sentence-transformers>=3.0.0
+spacy>=3.7.0
+vaderSentiment>=3.3.2
+
+# Optional voice interface
+speechrecognition>=3.10.0
+pyttsx3>=2.90
+python-multipart>=0.0.9
+websockets>=12.0
+aiofiles>=23.2.1
+
+# Security
+cryptography>=41.0.0
+
+# Optional: Cognee integration (install separately if needed)
+# cognee>=0.1.0

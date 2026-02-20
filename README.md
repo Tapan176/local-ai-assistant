@@ -1,149 +1,94 @@
-# TAPAN_AI – Personal AI Assistant (SQLite-First)
+# TAPAN_AI v2
 
-A modular, offline-first personal AI assistant built in Python.
-Uses **SQLite** as the source of truth and optional **Cognee + Neo4j** for semantic/graph-based memory recall.
+Production-ready, local-first cognitive AI companion with:
+
+- Perception -> Memory -> Reasoning -> Planning -> Tooling -> Reflection pipeline
+- Episodic, semantic, persona, and relationship memory
+- Dynamic intent inference and uncertainty-aware clarification
+- Async FastAPI + WebSocket + streaming + CLI interfaces
+- Structured JSON logs and dependency-injected modular architecture
 
 ## Architecture
 
-```
-User Input → IntentParser (regex) → Orchestrator → Tool.execute()
-                     ↓
-                   MemoryRouter
-                  ↙        ↘
-                MemoryTool    CogneeTool
-                (SQLite)      (Cognee/Neo4j)
-```
-
-- **SQLite** = transactional truth (ACID, always available)
-- **Cognee** = cognitive layer (graph traversal, semantic recall — optional)
-- **MemoryRouter** picks the right backend per query
-
-## Directory Structure
-
-```
-J/
-├── src/
-│   ├── agent/           # AI agent: orchestrator, intent parser, tools
-│   │   ├── tools/       # BaseTool implementations (finance, memory, cognee, etc.)
-│   │   ├── memory_router.py   # SQLite ↔ Cognee routing
-│   │   ├── orchestrator.py    # Central event loop
-│   │   └── intent_parser.py   # Deterministic regex routing
-│   ├── core/            # Domain managers (finance, memory, habits, etc.)
-│   ├── db/              # BaseRepository (universal SQLite CRUD)
-│   ├── memory/          # Cognee brain, ingestion pipeline, recall guard
-│   ├── service/         # Data service, scheduler, brain service
-│   ├── cli/             # CLI app entry point
-│   └── utils/           # Helpers
-├── tests/               # Pytest test files
-├── _schemas/            # SQL schema definitions
-├── data/                # Runtime data (gitignored)
-├── requirements.txt
-└── .gitignore
-```
+- `tapan_ai/core/`: orchestrator, perception, reasoning, planning, emotion, reflection, proactive suggestions
+- `tapan_ai/memory/`: episodic/semantic/persona memory plus retrieval/saver services
+- `tapan_ai/storage/`: SQLite repository, vector backend (Chroma with fallback), graph store
+- `tapan_ai/tools/`: finance, reminder, people, calendar tool services
+- `tapan_ai/llm/`: provider dispatcher, prompt builder, streaming
+- `tapan_ai/interfaces/`: CLI, API, WebSocket, voice interface with optional voice identity lock
+- `tapan_ai/config/`: runtime settings and system prompt
 
 ## Setup
 
-### Prerequisites
-- **Python 3.10+**
-- (Optional) **Neo4j** for graph memory
-- (Optional) **Cognee** for vector memory
-
-### Installation
+Python 3.11+:
 
 ```bash
-# Clone & enter project
-cd J
-
-# Create virtual environment
 python -m venv .venv
-
-# Activate (Windows)
-.venv\Scripts\activate
-
-# Activate (Linux/Mac)
-source .venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
+.venv\Scripts\python -m pip install -r requirements.txt
 ```
 
-### Environment Variables
+Optional env vars:
 
-Create a `.env` file in the project root (gitignored):
-
-```env
-# Optional: Cognee/Neo4j config
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=your_password
+```bash
+set TAPAN_LLM_PROVIDER=mock
+set TAPAN_SQLITE_PATH=data/tapan_ai_v2.db
+set TAPAN_CHROMA_PATH=data/chroma_v2
+set TAPAN_API_HOST=127.0.0.1
+set TAPAN_API_PORT=8000
+set TAPAN_INTENT_CLASSIFIER=hybrid
+set TAPAN_SEMANTIC_INTENT_MODEL=sentence-transformers/all-MiniLM-L6-v2
+set TAPAN_SEMANTIC_INTENT_THRESHOLD=0.62
+set TAPAN_SPACY_MODEL=en_core_web_sm
 ```
+
+Optional NLP upgrades (recommended for less hardcoded behavior):
+
+```bash
+.venv\Scripts\python -m pip install sentence-transformers spacy vaderSentiment
+.venv\Scripts\python -m spacy download en_core_web_sm
+```
+
+With these installed:
+- intent inference uses semantic embeddings (`sentence-transformers`) in hybrid mode
+- entity extraction uses spaCy NER when available
+- emotional scoring uses VADER sentiment when available
 
 ## Run
 
-```bash
-# CLI mode
-python -m src.cli.app
-
-# Voice mode
-python start_agent.py --voice
-
-# Voice owner-only strict mode (ignores non-verified speakers)
-python start_agent.py --voice --voice-strict
-
-# Or via start script
-python start.py
-```
-
-## Commands
-
-| Category | Command | Example |
-|----------|---------|---------|
-| **Finance** | `expense <amt> <cat>` | `expense 500 food` |
-| | `delete <account>` / `delete <account> account` | `delete abi` |
-| | `set <account> balance to <amount>` | `set default balance to 0` |
-| | `income <amt> <cat>` | `income 1000 salary` |
-| | `transfer <amt> from A to B` | `transfer 500 from savings to wallet` |
-| | `show accounts` / `balance` | |
-| **Memory** | `remember <text>` | `remember I like pizza` |
-| | `show memories` | |
-| **Cognee** | `recall <query>` | `recall what I said about food` |
-| | `deep recall <query>` | `deep recall gym habits` |
-| | `search memory <query>` | `search memory pizza` |
-| | `cognee health` | |
-| **Experience** | `log <text>` | `log went to gym` |
-| | `show experiences` / `stats` | |
-| **Reminder** | `remind <text>` | `remind me to buy milk` |
-| **Relation** | `show friend list` / `add friend <name>` | `add friend rahul` |
-| **Voice** | `register my voice as <name>` | `register my voice as tapan` |
-| | `set active voice <name>` | `set active voice tapan` |
-| **Reminder** | `show reminders` | |
-| **System** | `help` / `list` / `clear` / `exit` | |
-
-**Hinglish supported:** `yaad rakho`, `dikhao`, `hata do`, etc.
-
-## Testing
+CLI:
 
 ```bash
-# Run all tests
-pytest tests/ -v
-
-# Run specific test
-pytest tests/test_parser.py -v
-pytest tests/test_memory_router.py -v
+.venv\Scripts\python start.py
 ```
 
-## Principles
+API:
 
-- **SQLite Only**: Single source of truth — no JSON state files
-- **No Hallucination**: Deterministic responses for data queries
-- **Cognee Optional**: Graceful degradation when vector memory unavailable
-- **Hinglish Default**: Natural Hindi-English interaction (70/30 rule)
-- **OS Independent**: Works on Windows and Linux
-- **Privacy First**: All data stays local in `data/`
+```bash
+.venv\Scripts\python start.py --api
+```
 
+Note: `python start.py` now auto-switches to `.venv` if it exists.
 
-## Smart Safety Behaviors
+Endpoints:
 
-- **Account typo protection**: if you say `add 2500 to abi` and `sbi` exists, the assistant asks: `Did you mean sbi?` instead of silently creating the wrong account.
-- **Deletion variants**: supports `delete abi`, `remove abi`, `delete abi account`, `remove account abi`.
-- **Friend/relationship list**: supports `show friend list` and `who are in my current frient data`.
+- `GET /health`
+- `POST /chat`
+- `ws://<host>:<port>/ws/{session_id}`
+- `ws://<host>:<port>/ws-stream/{session_id}`
+
+## Scenario Examples
+
+- `bro kya hal chal`
+- `add 400 to axis`
+- `transfer 200 from axis to wallet`
+- `remind me to call mom tomorrow 9 am`
+- `schedule design review tomorrow at 5 pm`
+- `Ravi is my manager` -> `who is Ravi`
+- `I feel stressed and overwhelmed`
+
+## Production Notes
+
+- No static command registry in orchestration flow.
+- Prompt leakage is sanitized before user output.
+- All memory and tool state is local-first and persisted.
+- Repository has been consolidated to deploy-focused modules only.

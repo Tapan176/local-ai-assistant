@@ -1,0 +1,118 @@
+# Intent prototypes for the SemanticIntentClassifier.
+# Each key is an intent name; the value is a list of example phrases.
+# The classifier embeds these phrases and compares them against user input.
+
+greeting:
+  - "hello"
+  - "hi"
+  - "hey"
+  - "good morning"
+  - "good evening"
+  - "namaste"
+  - "howdy"
+  - "what's up"
+
+farewell:
+  - "bye"
+  - "goodbye"
+  - "see you later"
+  - "take care"
+  - "good night"
+
+identity:
+  - "my name is"
+  - "i am called"
+  - "call me"
+
+recall_name:
+  - "what is my name"
+  - "do you know me"
+  - "who am i"
+
+set_reminder:
+  - "remind me to"
+  - "set a reminder"
+  - "don't let me forget"
+  - "alert me to"
+
+list_reminders:
+  - "show reminders"
+  - "list my reminders"
+  - "what reminders do i have"
+  - "pending reminders"
+
+schedule_event:
+  - "schedule meeting"
+  - "add event"
+  - "create calendar event"
+  - "book a slot"
+
+list_events:
+  - "show calendar"
+  - "upcoming events"
+  - "what's on my schedule"
+
+create_account:
+  - "create account"
+  - "open a new account"
+  - "add account"
+
+check_balance:
+  - "check balance"
+  - "show balance"
+  - "how much money"
+  - "account balance"
+
+transfer_money:
+  - "transfer money"
+  - "send money"
+  - "move funds"
+  - "pay from"
+
+list_transactions:
+  - "show transactions"
+  - "transaction history"
+  - "recent transactions"
+
+add_person:
+  - "remember person"
+  - "add contact"
+  - "new person"
+
+mood_check:
+  - "how are you"
+  - "how do you feel"
+  - "are you okay"
+
+help_request:
+  - "help"
+  - "what can you do"
+  - "show commands"
+  - "capabilities"
+
+general_knowledge:
+  - "what is"
+  - "tell me about"
+  - "explain"
+  - "who is"
+  - "define"
+
+emotional_support:
+  - "i feel sad"
+  - "i am stressed"
+  - "i need help"
+  - "i am anxious"
+  - "cheer me up"
+
+compliment:
+  - "you are great"
+  - "well done"
+  - "good job"
+  - "thank you"
+  - "thanks"
+
+small_talk:
+  - "tell me a joke"
+  - "say something funny"
+  - "what's the weather"
+  - "how's it going"

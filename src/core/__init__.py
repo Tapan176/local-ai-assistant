@@ -1,24 +1,33 @@
-"""
-Core Package - Business logic managers
-"""
-from .memory import MemoryManager
-from .finance import FinanceManager
-from .reminders import ReminderManager
-from .habits import HabitTracker
-from .journal import JournalManager
-from .knowledge import KnowledgeManager
-from .intents import IntentRouter
-from .normalizer import Normalizer
-from .parser import HinglishParser
+"""Core cognitive engines for TAPAN_AI v2."""
+
+from .orchestrator import Orchestrator
+from .perception_engine import PerceptionEngine
+from .reasoning_engine import ReasoningEngine
+from .planning_engine import PlanningEngine
+from .emotional_engine import EmotionalEngine
+from .self_reflection import SelfReflectionEngine
+from .proactive_engine import ProactiveEngine
+from .output_sanitizer import OutputSanitizer
+from .reference_resolver import ReferenceResolver
+from .performance_monitor import PerformanceMonitor
+from .state_manager import StateManager
+from .data_inspector import DataInspector
+from .result_verifier import ResultVerifier
+from .error_recovery_engine import ErrorRecoveryEngine
 
 __all__ = [
-  'MemoryManager',
-  'FinanceManager', 
-  'ReminderManager',
-  'HabitTracker',
-  'JournalManager',
-  'KnowledgeManager',
-  'IntentRouter',
-  'Normalizer',
-  'HinglishParser'
+    "Orchestrator",
+    "PerceptionEngine",
+    "ReasoningEngine",
+    "PlanningEngine",
+    "EmotionalEngine",
+    "SelfReflectionEngine",
+    "ProactiveEngine",
+    "OutputSanitizer",
+    "ReferenceResolver",
+    "PerformanceMonitor",
+    "StateManager",
+    "DataInspector",
+    "ResultVerifier",
+    "ErrorRecoveryEngine",
 ]
