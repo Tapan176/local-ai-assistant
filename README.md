@@ -10,13 +10,13 @@ Production-ready, local-first cognitive AI companion with:
 
 ## Architecture
 
-- `tapan_ai/core/`: orchestrator, perception, reasoning, planning, emotion, reflection, proactive suggestions
-- `tapan_ai/memory/`: episodic/semantic/persona memory plus retrieval/saver services
-- `tapan_ai/storage/`: SQLite repository, vector backend (Chroma with fallback), graph store
-- `tapan_ai/tools/`: finance, reminder, people, calendar tool services
-- `tapan_ai/llm/`: provider dispatcher, prompt builder, streaming
-- `tapan_ai/interfaces/`: CLI, API, WebSocket, voice interface with optional voice identity lock
-- `tapan_ai/config/`: runtime settings and system prompt
+- `src/core/`: orchestrator, perception, reasoning, planning, emotion, reflection, proactive suggestions
+- `src/memory/`: episodic/semantic/persona memory plus retrieval/saver services
+- `src/storage/`: SQLite repository, vector backend (Chroma with fallback), graph store
+- `src/tools/`: finance, reminder, people, calendar tool services
+- `src/llm/`: provider dispatcher, BitNet/Ollama fallback chain, prompt builder, streaming
+- `src/interfaces/`: CLI, API, WebSocket, voice interface with optional voice identity lock
+- `src/config/`: runtime settings and system prompt
 
 ## Setup
 
@@ -39,6 +39,10 @@ set TAPAN_INTENT_CLASSIFIER=hybrid
 set TAPAN_SEMANTIC_INTENT_MODEL=sentence-transformers/all-MiniLM-L6-v2
 set TAPAN_SEMANTIC_INTENT_THRESHOLD=0.62
 set TAPAN_SPACY_MODEL=en_core_web_sm
+set TAPAN_BITNET_ENABLED=false
+set TAPAN_BITNET_MODE=auto
+set TAPAN_BITNET_CPP_EXECUTABLE=
+set TAPAN_BITNET_CPP_MODEL_PATH=
 ```
 
 Optional NLP upgrades (recommended for less hardcoded behavior):
@@ -53,21 +57,26 @@ With these installed:
 - entity extraction uses spaCy NER when available
 - emotional scoring uses VADER sentiment when available
 
+BitNet fallback:
+- `TAPAN_BITNET_MODE=cpp` -> force local `bitnet.cpp` executable + GGUF model.
+- `TAPAN_BITNET_MODE=service` -> force OpenAI-compatible BitNet HTTP service.
+- `TAPAN_BITNET_MODE=auto` -> try local `bitnet.cpp` first, then service, then Ollama fallback chain.
+
 ## Run
 
 CLI:
 
 ```bash
-.venv\Scripts\python start.py
+.venv\Scripts\python -c "from src.main import run_cli; run_cli()"
 ```
 
 API:
 
 ```bash
-.venv\Scripts\python start.py --api
+.venv\Scripts\python -c "from src.main import run_api; run_api()"
 ```
 
-Note: `python start.py` now auto-switches to `.venv` if it exists.
+You can also use `run_tapan.bat`.
 
 Endpoints:
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -15,21 +17,43 @@ logger = logging.getLogger(__name__)
 
 
 class BitNetBackend:
-    """BitNet service backend for local LLM inference."""
+    """BitNet backend with local bitnet.cpp and service fallback support."""
 
     def __init__(
         self,
         base_url: str = "http://localhost:8001",
         model: str = "bitnet-7b",
         timeout: int = 60,
+        mode: str = "auto",
+        cpp_executable: str = "",
+        cpp_model_path: str = "",
+        cpp_max_tokens: int = 256,
+        cpp_threads: int = 0,
+        cpp_ctx_size: int = 0,
+        cpp_extra_args: list[str] | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout = timeout
+        self.mode = mode.lower().strip()
+        self.cpp_executable = cpp_executable
+        self.cpp_model_path = cpp_model_path
+        self.cpp_max_tokens = cpp_max_tokens
+        self.cpp_threads = cpp_threads
+        self.cpp_ctx_size = cpp_ctx_size
+        self.cpp_extra_args = cpp_extra_args or []
         self._available: bool | None = None
 
     async def check_health(self) -> bool:
-        """Check if BitNet service is available."""
+        """Check if configured BitNet backend is available."""
+        if self.mode in {"cpp", "auto"} and self._check_cpp_health():
+            self._available = True
+            return True
+        if self.mode == "cpp":
+            self._available = False
+            return False
+
+        # Service health check
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get(f"{self.base_url}/health")
@@ -49,7 +73,25 @@ class BitNetBackend:
         temperature: float = 0.5,
         json_mode: bool = False,
     ) -> str | None:
-        """Generate text using BitNet service."""
+        """Generate text using bitnet.cpp and/or service backend."""
+        # 1) Try local bitnet.cpp first when configured.
+        if self.mode in {"cpp", "auto"}:
+            cpp_output = await self._generate_cpp(
+                system=system,
+                context=context,
+                user=user,
+                temperature=temperature,
+                json_mode=json_mode,
+            )
+            if cpp_output:
+                self._available = True
+                return cpp_output
+            if self.mode == "cpp":
+                logger.warning("bitnet.cpp backend unavailable")
+                self._available = False
+                return None
+
+        # 2) Try service backend.
         if not await self.check_health():
             logger.warning("BitNet service unavailable")
             return None
@@ -93,7 +135,15 @@ class BitNetBackend:
         user: str,
         temperature: float = 0.5,
     ) -> Any:
-        """Stream text generation from BitNet service."""
+        """Stream text generation from backend (single-chunk for bitnet.cpp)."""
+        if self.mode in {"cpp", "auto"}:
+            text = await self._generate_cpp(system=system, context=context, user=user, temperature=temperature, json_mode=False)
+            if text:
+                yield text
+                return
+            if self.mode == "cpp":
+                return
+
         if not await self.check_health():
             return
 
@@ -137,14 +187,108 @@ class BitNetBackend:
         """Check if backend is available (cached)."""
         return self._available is True
 
+    def _check_cpp_health(self) -> bool:
+        if not self.cpp_executable or not self.cpp_model_path:
+            return False
+        exe = Path(self.cpp_executable)
+        model = Path(self.cpp_model_path)
+        return exe.exists() and model.exists()
+
+    async def _generate_cpp(
+        self,
+        *,
+        system: str,
+        context: str,
+        user: str,
+        temperature: float,
+        json_mode: bool,
+    ) -> str | None:
+        if not self._check_cpp_health():
+            return None
+
+        prompt = (
+            f"[SYSTEM]\n{system}\n\n"
+            f"[CONTEXT]\n{context}\n\n"
+            f"[USER]\n{user}\n\n"
+            "[ASSISTANT]\n"
+        )
+        command = [
+            self.cpp_executable,
+            "-m",
+            self.cpp_model_path,
+            "-p",
+            prompt,
+            "-n",
+            str(self.cpp_max_tokens),
+            "--temp",
+            str(temperature),
+        ]
+        if self.cpp_threads > 0:
+            command.extend(["-t", str(self.cpp_threads)])
+        if self.cpp_ctx_size > 0:
+            command.extend(["-c", str(self.cpp_ctx_size)])
+        command.extend(self.cpp_extra_args)
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=self.timeout)
+        except asyncio.TimeoutError:
+            logger.warning("bitnet.cpp timed out after %ss", self.timeout)
+            return None
+        except Exception as exc:
+            logger.warning("bitnet.cpp launch failed: %s", exc)
+            return None
+
+        if process.returncode != 0:
+            err = stderr.decode("utf-8", errors="ignore").strip()
+            logger.warning("bitnet.cpp exited with code %s: %s", process.returncode, err)
+            return None
+
+        text = stdout.decode("utf-8", errors="ignore").strip()
+        if not text:
+            return None
+
+        # Remove echoed prompt if backend prints it back.
+        if text.startswith(prompt):
+            text = text[len(prompt) :].strip()
+
+        if json_mode:
+            json_match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+            if json_match:
+                candidate = json_match.group(0).strip()
+                try:
+                    json.loads(candidate)
+                    return candidate
+                except Exception:
+                    pass
+        return text
+
 
 def create_bitnet_backend(settings: Settings) -> BitNetBackend:
     """Create BitNet backend from settings."""
     bitnet_url = getattr(settings, "bitnet_url", "http://localhost:8001")
     bitnet_model = getattr(settings, "bitnet_model", "bitnet-7b")
     bitnet_timeout = getattr(settings, "bitnet_timeout", 60)
+    bitnet_mode = getattr(settings, "bitnet_mode", "auto")
+    cpp_executable = getattr(settings, "bitnet_cpp_executable", "")
+    cpp_model_path = getattr(settings, "bitnet_cpp_model_path", "")
+    cpp_max_tokens = getattr(settings, "bitnet_cpp_max_tokens", 256)
+    cpp_threads = getattr(settings, "bitnet_cpp_threads", 0)
+    cpp_ctx_size = getattr(settings, "bitnet_cpp_ctx_size", 0)
+    cpp_extra_args = getattr(settings, "bitnet_cpp_extra_args", [])
     return BitNetBackend(
         base_url=bitnet_url,
         model=bitnet_model,
         timeout=bitnet_timeout,
+        mode=bitnet_mode,
+        cpp_executable=cpp_executable,
+        cpp_model_path=cpp_model_path,
+        cpp_max_tokens=cpp_max_tokens,
+        cpp_threads=cpp_threads,
+        cpp_ctx_size=cpp_ctx_size,
+        cpp_extra_args=cpp_extra_args,
     )

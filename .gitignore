@@ -37,6 +37,14 @@ vault/
 
 # Temp test dirs
 tests/temp*/
+tmpclaude-*
+tests/results.json
+tests/verification_results.json
+tests/result_verifier_human_results.json
+tests/human_testing_results.json
+tests/integration_output.txt
+tests/output.log
+tests/test_state_and_inspector_results.json
 
 # Large/misc files
 *.zip

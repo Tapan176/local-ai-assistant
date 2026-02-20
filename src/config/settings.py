@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shlex
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,13 @@ class Settings(BaseModel):
     bitnet_model: str = Field(default="bitnet-7b", description="BitNet model name")
     bitnet_timeout: int = Field(default=60, description="BitNet timeout in seconds")
     bitnet_enabled: bool = Field(default=False, description="Enable BitNet backend")
+    bitnet_mode: str = Field(default="auto", description="auto|cpp|service")
+    bitnet_cpp_executable: str = Field(default="", description="Path to bitnet.cpp executable")
+    bitnet_cpp_model_path: str = Field(default="", description="Path to local GGUF model for bitnet.cpp")
+    bitnet_cpp_max_tokens: int = Field(default=256, description="Max generation tokens for bitnet.cpp backend")
+    bitnet_cpp_threads: int = Field(default=0, description="Thread count for bitnet.cpp (0=backend default)")
+    bitnet_cpp_ctx_size: int = Field(default=0, description="Context window size for bitnet.cpp (0=backend default)")
+    bitnet_cpp_extra_args: list[str] = Field(default_factory=list, description="Additional CLI args for bitnet.cpp")
 
     # ── API ─────────────────────────────────────────────────────────
     api_host: str = "127.0.0.1"
@@ -79,6 +87,12 @@ class Settings(BaseModel):
             "bitnet_model": os.getenv("TAPAN_BITNET_MODEL", "bitnet-7b"),
             "bitnet_timeout": int(os.getenv("TAPAN_BITNET_TIMEOUT", "60")),
             "bitnet_enabled": os.getenv("TAPAN_BITNET_ENABLED", "false").lower() == "true",
+            "bitnet_mode": os.getenv("TAPAN_BITNET_MODE", "auto"),
+            "bitnet_cpp_executable": os.getenv("TAPAN_BITNET_CPP_EXECUTABLE", ""),
+            "bitnet_cpp_model_path": os.getenv("TAPAN_BITNET_CPP_MODEL_PATH", ""),
+            "bitnet_cpp_max_tokens": int(os.getenv("TAPAN_BITNET_CPP_MAX_TOKENS", "256")),
+            "bitnet_cpp_threads": int(os.getenv("TAPAN_BITNET_CPP_THREADS", "0")),
+            "bitnet_cpp_ctx_size": int(os.getenv("TAPAN_BITNET_CPP_CTX_SIZE", "0")),
             "api_host": os.getenv("TAPAN_API_HOST", "127.0.0.1"),
             "api_port": int(os.getenv("TAPAN_API_PORT", "8000")),
             "log_level": os.getenv("TAPAN_LOG_LEVEL", "INFO"),
@@ -105,6 +119,9 @@ class Settings(BaseModel):
             data["ollama_fallback_models"] = [
                 m.strip() for m in fb.split(",") if m.strip()
             ]
+        cpp_args = os.getenv("TAPAN_BITNET_CPP_EXTRA_ARGS", "").strip()
+        if cpp_args:
+            data["bitnet_cpp_extra_args"] = shlex.split(cpp_args)
 
         return cls(**data)
 
