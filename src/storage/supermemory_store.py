@@ -26,15 +26,15 @@ class SupermemoryStore:
             logger.warning("No Supermemory API key provided. Memory operations will be no-ops.")
 
     async def add_memory(self, content: str, container_tag: str, metadata: dict[str, Any] | None = None) -> bool:
-        """Add a memory to Supermemory."""
+        """Add a memory to Supermemory using update_memory (upsert)."""
         if not self._client:
             return False
 
         try:
-            self._client.memories.add(
-                content=content,
+            self._client.memories.update_memory(
+                new_content=content,
                 container_tag=container_tag,
-                metadata=metadata or {}
+                metadata=metadata or {},
             )
             return True
         except Exception as e:
@@ -47,13 +47,13 @@ class SupermemoryStore:
             return []
 
         try:
-            search_args: dict[str, Any] = {"q": query}
+            search_kwargs: dict[str, Any] = {"q": query}
             if filters:
-                tag_context = filters.get("container_tag", "")
-                if tag_context:
-                    search_args["q"] = f"[{tag_context}] {query}"
+                tag = filters.get("container_tag")
+                if tag:
+                    search_kwargs["categories_filter"] = [tag]
 
-            response = self._client.search.execute(**search_args)
+            response = self._client.search.execute(**search_kwargs)
             return getattr(response, "results", [])
         except Exception as e:
             logger.error("Supermemory search_memory failed: %s", e)

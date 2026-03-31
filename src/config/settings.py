@@ -61,7 +61,7 @@ class Settings(BaseModel):
     openrouter_api_key: str = Field(default="", description="OpenRouter API key")
     openrouter_url: str = "https://openrouter.ai/api/v1/chat/completions"
     openrouter_model: str = Field(
-        default="mistralai/devstral-2512:free",
+        default="meta-llama/llama-3.3-70b-instruct:free",
         description="Primary OpenRouter model (free tier)",
     )
     openrouter_fallback_model: str = Field(
@@ -135,7 +135,7 @@ class Settings(BaseModel):
                 "https://openrouter.ai/api/v1/chat/completions",
             ),
             "openrouter_model": os.getenv(
-                "TAPAN_OPENROUTER_MODEL", "mistralai/devstral-2512:free"
+                "TAPAN_OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free"
             ),
             "openrouter_fallback_model": os.getenv(
                 "TAPAN_OPENROUTER_FALLBACK_MODEL", "google/gemma-3-27b-it:free"
