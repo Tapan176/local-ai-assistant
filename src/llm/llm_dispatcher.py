@@ -89,26 +89,84 @@ class LLMDispatcher:
         temperature: float = 0.5,
         json_mode: bool = False,
     ) -> str:
-        """Try BitNet → Ollama models → heuristic fallback."""
+        """Try OpenRouter → Ollama → BitNet → heuristic fallback."""
         provider = self.settings.llm_provider.lower()
         if provider == "mock":
             return self._heuristic_generation(system, context, user, temperature, json_mode)
 
-        # Try BitNet first if enabled
-        if self._bitnet_backend and self.settings.bitnet_enabled:
-            text = await self._bitnet_backend.generate(system, context, user, temperature, json_mode)
-            if text:
-                return text
+        # 1. OpenRouter (primary cloud LLM)
+        if self.settings.openrouter_api_key:
+            for model in [self.settings.openrouter_model, self.settings.openrouter_fallback_model]:
+                text = await self._openrouter_chat(model, system, context, user, temperature, json_mode)
+                if text:
+                    return text
 
-        # Build model chain: primary → fallbacks
+        # 2. Ollama fallback (local models)
         models = [self.settings.ollama_model] + list(self.settings.ollama_fallback_models)
         for model in models:
             text = await self._ollama_chat(model, system, context, user, temperature, json_mode)
             if text:
                 return text
 
+        # 3. BitNet fallback (last resort local)
+        if self._bitnet_backend and self.settings.bitnet_enabled:
+            text = await self._bitnet_backend.generate(system, context, user, temperature, json_mode)
+            if text:
+                return text
+
         logger.warning("All LLM backends failed, falling back to heuristic generation")
         return self._heuristic_generation(system, context, user, temperature, json_mode)
+
+    # ── OpenRouter (OpenAI-compatible API) ──────────────────────────
+
+    async def _openrouter_chat(
+        self,
+        model: str,
+        system: str,
+        context: str,
+        user: str,
+        temperature: float,
+        json_mode: bool,
+    ) -> str | None:
+        """Call OpenRouter using the OpenAI-compatible chat completions API."""
+        headers = {
+            "Authorization": f"Bearer {self.settings.openrouter_api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://tapan-ai.local",
+            "X-Title": "TAPAN_AI",
+        }
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "system", "content": context},
+                {"role": "user", "content": user},
+            ],
+            "temperature": temperature,
+        }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        try:
+            timeout = float(self.settings.openrouter_timeout)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    self.settings.openrouter_url,
+                    headers=headers,
+                    json=payload,
+                )
+                response.raise_for_status()
+                data = response.json()
+                choices = data.get("choices", [])
+                if choices:
+                    content = str(choices[0].get("message", {}).get("content", "")).strip()
+                    if content:
+                        logger.info("OpenRouter model %s responded successfully", model)
+                        return content
+        except httpx.TimeoutException:
+            logger.warning("OpenRouter model %s timed out after %ss", model, self.settings.openrouter_timeout)
+        except Exception as exc:
+            logger.warning("OpenRouter model %s failed: %s", model, exc)
+        return None
 
     # ── Ollama (parameterized by model) ─────────────────────────────
 

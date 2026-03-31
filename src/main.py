@@ -31,10 +31,8 @@ from src.memory.memory_retriever import MemoryRetriever
 from src.memory.memory_saver import MemorySaver
 from src.memory.persona_memory import PersonaMemory
 from src.memory.semantic_memory import SemanticMemory
-from src.storage.graph_store import GraphStore
-from src.storage.cognee_store import CogneeStore
 from src.storage.sqlite_store import SQLiteStore
-from src.storage.vector_store import create_vector_store
+from src.storage.supermemory_store import SupermemoryStore
 from src.tools.calendar_tool import CalendarTool
 from src.tools.finance_tool import FinanceTool
 from src.tools.people_tool import PeopleTool
@@ -59,26 +57,23 @@ async def build_runtime(settings: Settings | None = None) -> Runtime:
     sqlite_store = SQLiteStore(settings.sqlite_path)
     await sqlite_store.initialize()
 
-    vector_store = create_vector_store(settings)
-    # Use CogneeStore with SQLite fallback
-    cognee_store = CogneeStore(sqlite_store)
-    graph_store = GraphStore(sqlite_store)  # Keep for fallback compatibility
+    supermemory_store = SupermemoryStore(settings.supermemory_api_key)
 
-    episodic_memory = EpisodicMemory(sqlite_store)
-    semantic_memory = SemanticMemory(sqlite_store, vector_store)
-    persona_memory = PersonaMemory(sqlite_store)
+    episodic_memory = EpisodicMemory(sqlite_store, supermemory_store)
+    semantic_memory = SemanticMemory(sqlite_store, supermemory_store)
+    persona_memory = PersonaMemory(sqlite_store, supermemory_store)
     memory_retriever = MemoryRetriever(
         episodic_memory=episodic_memory,
         semantic_memory=semantic_memory,
         persona_memory=persona_memory,
-        graph_store=cognee_store,  # Use CogneeStore
+        supermemory_store=supermemory_store,
         max_items=settings.max_memory_items,
     )
     memory_saver = MemorySaver(
         episodic_memory=episodic_memory,
         semantic_memory=semantic_memory,
         persona_memory=persona_memory,
-        graph_store=cognee_store,  # Use CogneeStore
+        supermemory_store=supermemory_store,
     )
 
     llm_dispatcher = LLMDispatcher(settings)
@@ -101,7 +96,7 @@ async def build_runtime(settings: Settings | None = None) -> Runtime:
     # Register tools
     tool_registry.register(FinanceTool(sqlite_store))
     tool_registry.register(ReminderTool(sqlite_store))
-    tool_registry.register(PeopleTool(sqlite_store, cognee_store))
+    tool_registry.register(PeopleTool(sqlite_store, supermemory_store))
     tool_registry.register(CalendarTool(sqlite_store))
     
     # Register tool schemas (for function calling)
@@ -129,7 +124,7 @@ async def build_runtime(settings: Settings | None = None) -> Runtime:
     health_checker = HealthChecker(
         sqlite_store=sqlite_store,
         llm_dispatcher=llm_dispatcher,
-        vector_store=vector_store,
+        supermemory_store=supermemory_store,
     )
     
     return Runtime(

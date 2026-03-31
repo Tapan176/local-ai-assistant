@@ -8,11 +8,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.storage.sqlite_store import SQLiteStore
+from src.storage.supermemory_store import SupermemoryStore
 
 
 class PersonaMemory:
-    def __init__(self, sqlite_store: SQLiteStore) -> None:
+    def __init__(self, sqlite_store: SQLiteStore, supermemory_store: SupermemoryStore) -> None:
         self.sqlite_store = sqlite_store
+        self.supermemory = supermemory_store
 
     async def get_profile(self) -> dict[str, Any]:
         row = await self.sqlite_store.fetchone(
@@ -89,6 +91,14 @@ class PersonaMemory:
         )
 
     async def learn_from_text(self, text: str) -> None:
+        # Offload to Supermemory for rich context extraction
+        await self.supermemory.add_memory(
+            content=text,
+            container_tag="persona",
+            metadata={"type": "observation"}
+        )
+
+        # Also do local regex extraction for SQLite (instant recall)
         lowered = text.lower().strip()
         preferences: dict[str, Any] = {}
         goals: dict[str, Any] = {}
@@ -118,3 +128,9 @@ class PersonaMemory:
 
         if preferences or goals:
             await self.update_profile(preferences=preferences or None, goals=goals or None)
+
+    async def search_context(self, query: str) -> list[dict[str, Any]]:
+        """Search Supermemory for persona information."""
+        return await self.supermemory.search_memory(
+            query=query, filters={"container_tag": "persona"}
+        )

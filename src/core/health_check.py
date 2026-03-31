@@ -16,15 +16,15 @@ class HealthChecker:
         self,
         sqlite_store: Any,
         llm_dispatcher: Any,
-        vector_store: Any | None = None,
+        supermemory_store: Any | None = None,
     ) -> None:
         self.sqlite_store = sqlite_store
         self.llm_dispatcher = llm_dispatcher
-        self.vector_store = vector_store
+        self.supermemory_store = supermemory_store
 
     async def check_health(self) -> dict[str, Any]:
         """Perform comprehensive health check."""
-        checks = {
+        checks: dict[str, Any] = {
             "status": "healthy",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "components": {},
@@ -43,11 +43,9 @@ class HealthChecker:
 
         # Check LLM backend
         try:
-            # Quick health check - try to generate with mock
             if self.llm_dispatcher.settings.llm_provider.lower() == "mock":
                 checks["components"]["llm"] = {"status": "healthy", "provider": "mock"}
             else:
-                # Check if backend is reachable (non-blocking)
                 checks["components"]["llm"] = {
                     "status": "healthy",
                     "provider": self.llm_dispatcher.settings.llm_provider,
@@ -59,14 +57,13 @@ class HealthChecker:
             }
             checks["status"] = "degraded"
 
-        # Check vector store
-        if self.vector_store:
+        # Check Supermemory
+        if self.supermemory_store:
             try:
-                # Quick query test
-                await self.vector_store.query("test", limit=1)
-                checks["components"]["vector_store"] = {"status": "healthy"}
+                await self.supermemory_store.search_memory("health_check_ping")
+                checks["components"]["supermemory"] = {"status": "healthy"}
             except Exception as e:
-                checks["components"]["vector_store"] = {
+                checks["components"]["supermemory"] = {
                     "status": "unhealthy",
                     "error": str(e),
                 }

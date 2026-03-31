@@ -26,8 +26,8 @@ class Settings(BaseModel):
     sqlite_path: str = "data/tapan_ai_v1.db"
     chroma_path: str = "data/chroma_v1"
 
-    # ── LLM (fully local via Ollama/BitNet) ────────────────────────────────
-    llm_provider: str = "ollama"
+    # ── LLM Provider Chain: openrouter → ollama → bitnet → heuristic ────────
+    llm_provider: str = "openrouter"
     ollama_url: str = "http://localhost:11434/api/chat"
     ollama_model: str = "qwen2.5:7b"
     ollama_fallback_models: list[str] = Field(
@@ -56,6 +56,24 @@ class Settings(BaseModel):
     log_level: str = "WARNING"
     max_memory_items: int = 8
     stream_chunk_size: int = 18
+
+    # ── OpenRouter (Primary Cloud LLM) ──────────────────────────────────
+    openrouter_api_key: str = Field(default="", description="OpenRouter API key")
+    openrouter_url: str = "https://openrouter.ai/api/v1/chat/completions"
+    openrouter_model: str = Field(
+        default="mistralai/devstral-2512:free",
+        description="Primary OpenRouter model (free tier)",
+    )
+    openrouter_fallback_model: str = Field(
+        default="google/gemma-3-27b-it:free",
+        description="Fallback OpenRouter model (free tier)",
+    )
+    openrouter_timeout: int = Field(default=60, description="OpenRouter timeout in seconds")
+
+    # ── Supermemory (Unified Memory) ────────────────────────────────────
+    supermemory_api_key: str = Field(
+        default="", description="API key for Supermemory.ai"
+    )
 
     # ── Intent classifier ───────────────────────────────────────────
     intent_classifier: str = Field(
@@ -111,6 +129,19 @@ class Settings(BaseModel):
                 os.getenv("TAPAN_SEMANTIC_INTENT_THRESHOLD", "0.62")
             ),
             "spacy_model": os.getenv("TAPAN_SPACY_MODEL", "en_core_web_sm"),
+            "openrouter_api_key": os.getenv("OPENROUTER_API_KEY", ""),
+            "openrouter_url": os.getenv(
+                "TAPAN_OPENROUTER_URL",
+                "https://openrouter.ai/api/v1/chat/completions",
+            ),
+            "openrouter_model": os.getenv(
+                "TAPAN_OPENROUTER_MODEL", "mistralai/devstral-2512:free"
+            ),
+            "openrouter_fallback_model": os.getenv(
+                "TAPAN_OPENROUTER_FALLBACK_MODEL", "google/gemma-3-27b-it:free"
+            ),
+            "openrouter_timeout": int(os.getenv("TAPAN_OPENROUTER_TIMEOUT", "60")),
+            "supermemory_api_key": os.getenv("TAPAN_SUPERMEMORY_API_KEY", ""),
         }
 
         # Parse fallback models from comma-separated env var

@@ -6,7 +6,7 @@ import re
 from datetime import datetime, timezone
 
 from src.models import MemoryContext, ReasoningOutput, ToolExecutionResult
-from src.storage.graph_store import GraphStore
+from src.storage.supermemory_store import SupermemoryStore
 from src.storage.sqlite_store import SQLiteStore
 
 
@@ -14,9 +14,9 @@ class PeopleTool:
     name = "people_tool"
     description = "Store and retrieve relationship information."
 
-    def __init__(self, sqlite_store: SQLiteStore, graph_store: GraphStore) -> None:
+    def __init__(self, sqlite_store: SQLiteStore, supermemory_store: SupermemoryStore) -> None:
         self.sqlite_store = sqlite_store
-        self.graph_store = graph_store
+        self.supermemory = supermemory_store
 
     async def execute(
         self,
@@ -54,7 +54,11 @@ class PeopleTool:
                     """,
                     (name, relation, "", datetime.now(timezone.utc).isoformat()),
                 )
-                await self.graph_store.add_relationship("user", name, relation)
+                await self.supermemory.add_memory(
+                    content=f"user is {relation} of {name}",
+                    container_tag="relationships",
+                    metadata={"source": "user", "target": name, "relation": relation},
+                )
                 return ToolExecutionResult(
                     tool_name=self.name,
                     success=True,
@@ -103,7 +107,11 @@ class PeopleTool:
             """,
             (name, relationship, notes, datetime.now(timezone.utc).isoformat()),
         )
-        await self.graph_store.add_relationship("user", name, relationship)
+        await self.supermemory.add_memory(
+            content=f"user is {relationship} of {name}",
+            container_tag="relationships",
+            metadata={"source": "user", "target": name, "relation": relationship},
+        )
 
         msg = f"Saved. {name} is marked as your {relationship}."
         if notes:

@@ -8,13 +8,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.storage.sqlite_store import SQLiteStore
-from src.storage.vector_store import BaseVectorStore
+from src.storage.supermemory_store import SupermemoryStore
 
 
 class SemanticMemory:
-    def __init__(self, sqlite_store: SQLiteStore, vector_store: BaseVectorStore) -> None:
+    def __init__(self, sqlite_store: SQLiteStore, supermemory_store: SupermemoryStore) -> None:
         self.sqlite_store = sqlite_store
-        self.vector_store = vector_store
+        self.supermemory = supermemory_store
 
     async def upsert_fact(self, fact_key: str, fact_value: str, confidence: float = 0.7) -> None:
         now = datetime.now(timezone.utc).isoformat()
@@ -44,11 +44,31 @@ class SemanticMemory:
             """,
             (doc_id, text, json.dumps(metadata, ensure_ascii=True), now),
         )
-        await self.vector_store.upsert(doc_id, text, metadata)
+        await self.supermemory.add_memory(
+            content=text,
+            container_tag="semantic",
+            metadata={"doc_id": doc_id, **(metadata or {})},
+        )
         return doc_id
 
     async def retrieve(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
-        vector_hits = await self.vector_store.query(query, limit=limit)
+        # 1. Semantic search via Supermemory
+        results = await self.supermemory.search_memory(
+            query=query, filters={"container_tag": "semantic"}
+        )
+        hits: list[dict[str, Any]] = []
+        for res in results:
+            if isinstance(res, dict):
+                hits.append({
+                    "id": res.get("id", ""),
+                    "text": res.get("content", str(res)),
+                    "metadata": res.get("metadata", {}),
+                    "score": res.get("score", 1.0),
+                })
+            else:
+                hits.append({"id": "", "text": str(res), "metadata": {}, "score": 1.0})
+
+        # 2. Merge in SQLite facts
         fact_rows = await self.sqlite_store.fetchall(
             """
             SELECT fact_key, fact_value, confidence, updated_at
@@ -69,7 +89,7 @@ class SemanticMemory:
                 """
             )
         for row in fact_rows:
-            vector_hits.append(
+            hits.append(
                 {
                     "id": f"fact:{row['fact_key']}",
                     "text": f"{row['fact_key']}: {row['fact_value']}",
@@ -77,8 +97,8 @@ class SemanticMemory:
                     "score": float(row["confidence"]),
                 }
             )
-        vector_hits.sort(key=lambda item: item.get("score", 0.0), reverse=True)
-        return vector_hits[:limit]
+        hits.sort(key=lambda item: item.get("score", 0.0), reverse=True)
+        return hits[:limit]
 
     async def consolidate(self) -> int:
         duplicates = await self.sqlite_store.fetchall(

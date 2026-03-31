@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from src.models import ConversationTurn, ReflectionReport
-from src.storage.graph_store import GraphStore
+from src.storage.supermemory_store import SupermemoryStore
 
 from .episodic_memory import EpisodicMemory
 from .persona_memory import PersonaMemory
@@ -19,12 +19,12 @@ class MemorySaver:
         episodic_memory: EpisodicMemory,
         semantic_memory: SemanticMemory,
         persona_memory: PersonaMemory,
-        graph_store: GraphStore,
+        supermemory_store: SupermemoryStore,
     ) -> None:
         self.episodic_memory = episodic_memory
         self.semantic_memory = semantic_memory
         self.persona_memory = persona_memory
-        self.graph_store = graph_store
+        self.supermemory = supermemory_store
 
     async def save_turn(
         self,
@@ -77,4 +77,8 @@ class MemorySaver:
         target = tool_data.get("target")
         relation = tool_data.get("relation")
         if source and target and relation:
-            await self.graph_store.add_relationship(source, target, relation, weight=1.0)
+            await self.supermemory.add_memory(
+                content=f"{source} is {relation} of {target}",
+                container_tag="relationships",
+                metadata={"source": str(source), "target": str(target), "relation": str(relation)},
+            )
