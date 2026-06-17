@@ -141,7 +141,7 @@ class Orchestrator:
             plan = await self.planning_engine.plan(resolved_user_text, reasoning, perception, memory)
 
             if plan.action_type == "clarify":
-                assistant_text = plan.clarification_question or "Could you clarify what you want me to do?"
+                assistant_text = plan.clarification_question or "I want to help! Can you tell me a bit more about what you need?"
             elif plan.action_type == "tool" and plan.tool_name:
                 tool_result = await self.tool_registry.execute(
                     tool_name=plan.tool_name,
@@ -303,7 +303,10 @@ class Orchestrator:
         temperature: float,
     ) -> str:
         if not tool_result.get("success", False):
-            return str(tool_result.get("output_text", "I couldn't complete that tool action."))
+            error_text = str(tool_result.get("output_text", ""))
+            if error_text:
+                return f"Hmm, that didn't work — {error_text}. Want to try a different approach?"
+            return "That didn't quite work. Can you give me more details so I can try again?"
 
         base = str(tool_result.get("output_text", "")).strip()
         # Single clean response: use only tool output when it's already complete (lists, multi-line, or long)
@@ -314,7 +317,10 @@ class Orchestrator:
             generated = self._default_tool_followup(reasoning.inferred_intent, perception_tone, tool_result)
         else:
             generated = await self.llm_dispatcher.generate_text(
-                system="You are a concise conversational assistant. Reply in one short sentence only.",
+                system=(
+                    "You are a warm personal AI companion. Add a brief, friendly follow-up to the tool result. "
+                    "Be helpful and suggest a natural next step. One short sentence only."
+                ),
                 context=(
                     f"Tone: {perception_tone}\n"
                     f"Intent: {reasoning.inferred_intent}\n"
@@ -360,21 +366,21 @@ class Orchestrator:
             accounts_present = isinstance(data, dict) and "accounts" in data
             accounts = data.get("accounts", []) if isinstance(data, dict) else []
             if accounts_present and isinstance(accounts, list) and not accounts:
-                return "Want me to create your first account now? Say the account name and optional opening balance."
+                return "Want me to set up your first account? Just tell me the name and opening balance 💰"
             if "no transaction history" in output_text:
-                return "Want me to add your first transaction entry?"
+                return "Want me to log your first transaction?"
             if "created account" in output_text:
-                return "Want me to show all account balances now?"
-            return "Want me to show your latest transaction history?"
+                return "Nice! Want me to show all your accounts now?"
+            return "Want to see your recent transactions too?"
         if intent == "reminder_management":
-            return "Should I add another related reminder?"
+            return "Need any other reminders while we're at it?"
         if intent == "calendar_management":
-            return "Do you want a prep reminder for this event?"
+            return "Want me to set a reminder before this event?"
         if intent == "people_memory_update":
-            return "Want me to store a quick note about this person too?"
+            return "Anything else you'd like me to remember about them?"
         if tone in {"informal", "casual"}:
-            return "Anything else you want me to handle right now?"
-        return "Let me know if you want another action."
+            return "What else can I help with?"
+        return "Anything else on your mind?"
 
     @staticmethod
     def _pick_suggestion(

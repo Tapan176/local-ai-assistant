@@ -28,6 +28,20 @@ recall_name:
   - "what is my name"
   - "do you know me"
   - "who am i"
+  - "do you remember me"
+  - "what do you know about me"
+
+memory_query:
+  - "what memories do you have"
+  - "what do you remember"
+  - "show me my memories"
+  - "what have we talked about"
+  - "what do you know about me"
+  - "show my data"
+  - "what information do you have"
+  - "memories in supermemory"
+  - "what's in your memory"
+  - "recall our conversations"
 
 set_reminder:
   - "remind me to"

@@ -92,7 +92,7 @@ class PeopleTool:
             return ToolExecutionResult(
                 tool_name=self.name,
                 success=False,
-                output_text="I can store people info. Say e.g. 'Roy is my friend' or 'add a friend Roy' or 'name Roy relation friend'.",
+                output_text="I'd love to remember someone for you! Just tell me their name and how you know them — like 'Roy is my friend' or 'add a friend Roy'.",
             )
 
         name, relationship, notes = parsed

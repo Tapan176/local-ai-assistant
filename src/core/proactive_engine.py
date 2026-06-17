@@ -75,7 +75,7 @@ class ProactiveEngine:
                 {
                     "type": "wellbeing",
                     "priority": "medium",
-                    "message": "Want a 2-minute reset plan before continuing?",
+                    "message": "You seem like you could use a breather. Want me to help you reset with a quick 2-minute plan?",
                     "action": "micro_reset",
                 }
             ]
@@ -85,8 +85,17 @@ class ProactiveEngine:
                 {
                     "type": "planning",
                     "priority": "low",
-                    "message": "Want a quick review of today and tomorrow priorities?",
+                    "message": "It's evening — want a quick review of what's done and what's ahead tomorrow?",
                     "action": "day_review",
+                }
+            ]
+        if 5 <= hour <= 9:
+            return [
+                {
+                    "type": "planning",
+                    "priority": "low",
+                    "message": "Good morning! Want me to run through your reminders and schedule for today?",
+                    "action": "morning_brief",
                 }
             ]
         return []

@@ -52,7 +52,7 @@ def test_settings_defaults():
 
     settings = Settings.from_env()
     # Provider should be 'ollama' unless overridden by env
-    assert settings.llm_provider in {"ollama", "mock"}, f"Unexpected provider: {settings.llm_provider}"
+    assert settings.llm_provider in {"ollama", "mock", "openrouter"}, f"Unexpected provider: {settings.llm_provider}"
     assert "ollama" in settings.ollama_url or "localhost" in settings.ollama_url
     assert settings.ollama_model is not None and len(settings.ollama_model) > 0
 

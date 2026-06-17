@@ -38,6 +38,43 @@ class LLMDispatcher:
     async def infer_reasoning(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Infer intent using semantic classification first, then LLM fallback."""
         user_text = str(payload.get("user_text", "")).strip()
+        lowered = user_text.lower().strip()
+
+        # 0. Hard fast-path: identity & memory queries (NEVER send to tools)
+        name_match = re.search(
+            r"\b(?:my name is|call me|i am|i'm)\s+([a-zA-Z][a-zA-Z\s]{0,30})",
+            lowered,
+        )
+        if name_match:
+            return {
+                "inferred_intent": "identity",
+                "confidence": 0.95,
+                "needs_clarification": False,
+                "clarification_question": None,
+                "possible_actions": ["respond_conversationally"],
+                "tool_candidates": [],
+                "uncertainty": 0.05,
+                "rationale": "Name declaration detected — no tool needed.",
+            }
+
+        memory_query_phrases = (
+            "what memories", "what do you remember", "do you know me",
+            "do you remember me", "who am i", "what is my name",
+            "what's my name", "what do you know about me",
+            "memories in supermemory", "show my data", "my profile",
+            "what have we talked about", "your memory",
+        )
+        if any(phrase in lowered for phrase in memory_query_phrases):
+            return {
+                "inferred_intent": "memory_query",
+                "confidence": 0.92,
+                "needs_clarification": False,
+                "clarification_question": None,
+                "possible_actions": ["respond_with_memory_snapshot"],
+                "tool_candidates": [],
+                "uncertainty": 0.08,
+                "rationale": "Memory/identity query — respond from memory, no tool.",
+            }
 
         # 1. Fast Path: Semantic Classification
         if self._semantic_intent_classifier:
@@ -251,11 +288,23 @@ class LLMDispatcher:
         )
         if name_declare_match:
             new_name = name_declare_match.group(1).strip().split(" ")[0].title()
-            return f"Got it, I'll call you {new_name}. What do you want to handle next?"
+            return (
+                f"Nice to meet you, {new_name}! 😊 I'll remember that. "
+                "Now tell me a bit about yourself — what do you do, and what kind of help would be most useful to you?"
+            )
 
         # Name recall
         if recalled_name and re.search(r"\bwhat(?:'s| is)\s+my\s+name\b", user_text, flags=re.IGNORECASE):
-            return f"Your name is {recalled_name}. I will keep using it naturally."
+            return f"Of course! You're {recalled_name}. I always remember 😊"
+        
+        # "Do you know me?" type queries
+        if re.search(r"\bdo you know me\b|\bdo you remember me\b|\bwho am i\b", user_text, flags=re.IGNORECASE):
+            if recalled_name:
+                return self._build_memory_snapshot(context, recalled_name)
+            return (
+                "We haven't properly met yet! I'd love to get to know you. "
+                "What's your name? And tell me a bit about yourself — I'll remember everything 😊"
+            )
 
         # Data request via text cues
         if self._is_data_request_text(lowered):
@@ -270,46 +319,75 @@ class LLMDispatcher:
         if emotion in {"sad", "stressed", "anxious"}:
             return self._handle_emotional_support(context=context, tone=tone, emotion=emotion, recalled_name=recalled_name)
 
-        # Final fallback based on temperature/tone
+        # Final fallback based on temperature/tone — always warm
+        name_bit = f" {recalled_name}" if recalled_name else ""
         if temperature >= 0.75:
-            return "I can brainstorm a few creative options if you want."
+            return f"Ooh, I love brainstorming{name_bit}! Let's explore some ideas together. What direction are you thinking?"
         if temperature <= 0.25:
-            return "Understood. Share the exact outcome and I will keep it precise."
+            return f"Got it{name_bit}. Give me the details and I'll handle it precisely."
 
         if tone in {"informal", "casual"}:
-            return "I am with you. Tell me what you want done next."
-        return "I understand. Tell me the outcome you want, and I will execute it."
+            return f"I'm here for you{name_bit}! What do you need?"
+        return f"I'm listening{name_bit}. What would you like to do?"
 
     # ── Handler methods (called from dispatch table) ────────────────
 
     def _handle_data_request(self, *, context: str, **_: Any) -> str:
         recalled_name = self._extract_recalled_name(context)
-        return self._build_memory_snapshot(context, recalled_name)
+        snapshot = self._build_memory_snapshot(context, recalled_name)
+        return snapshot
 
-    def _handle_quality_feedback(self, **_: Any) -> str:
+    def _handle_quality_feedback(self, *, context: str, **_: Any) -> str:
+        recalled_name = self._extract_recalled_name(context)
+        name_bit = f" {recalled_name}" if recalled_name else ""
         return (
-            "You're right to call that out. I should act on your message, not mirror it. "
-            "Tell me one thing to execute now and I'll do it."
+            f"You're absolutely right{name_bit}, and I appreciate you telling me. "
+            "I should be more helpful, not just echo things back. "
+            "Tell me what you need done and I'll actually do it."
         )
 
-    def _handle_next_step(self, *, tone: str, **_: Any) -> str:
+    def _handle_next_step(self, *, context: str, tone: str, **_: Any) -> str:
+        recalled_name = self._extract_recalled_name(context)
+        name_bit = f" {recalled_name}" if recalled_name else ""
         if tone in {"informal", "casual"}:
             return (
-                "Next step simple: I can manage money, reminders, people notes, or calendar plans. "
-                "Say one and I will handle it."
+                f"Alright{name_bit}! Here's what I can help with: "
+                "💰 finances, ⏰ reminders, 👥 people notes, or 📅 calendar. "
+                "What sounds most useful right now?"
             )
         return (
-            "Next step depends on your priority. I can handle finances, reminders, people memory, or calendar tasks. "
-            "Tell me which one to execute."
+            f"Good question{name_bit}! I can help you with:\n"
+            "• 💰 Track finances & budgets\n"
+            "• ⏰ Set reminders & to-dos\n"
+            "• 👥 Remember people & relationships\n"
+            "• 📅 Manage your calendar\n"
+            "What would be most helpful?"
         )
 
-    def _handle_greeting(self, *, tone: str, **_: Any) -> str:
-        if tone in {"informal", "casual"}:
-            return "Hey. I am here. What do you want to sort out first?"
-        return "Hey, good to hear from you. What should we tackle first?"
+    def _handle_greeting(self, *, context: str, tone: str, **_: Any) -> str:
+        recalled_name = self._extract_recalled_name(context)
+        # Check if we have any persona data at all
+        has_persona = recalled_name or "preferences:" in context and context.split("preferences:")[-1].strip()[:5] != "{}"
+        
+        if recalled_name:
+            if tone in {"informal", "casual"}:
+                return f"Hey {recalled_name}! Good to see you. What's on your mind today?"
+            return f"Hey {recalled_name}! How's your day going? Anything I can help with?"
+        elif not has_persona:
+            # No memories at all — trigger onboarding
+            return (
+                "Hey! Great to meet you 😊 I'm Tapan, your personal AI companion. "
+                "I get better the more I know about you. What should I call you?"
+            )
+        else:
+            if tone in {"informal", "casual"}:
+                return "Hey! Good to have you back. What are we working on today?"
+            return "Hey! Nice to hear from you. What can I help you with today?"
 
-    def _handle_emotional_support(self, **_: Any) -> str:
-        return "I hear you. We can take this one step at a time. Want support, a plan, or both?"
+    def _handle_emotional_support(self, *, context: str, **_: Any) -> str:
+        recalled_name = self._extract_recalled_name(context)
+        name_prefix = f"{recalled_name}, " if recalled_name else ""
+        return f"{name_prefix}I hear you. We can take this one step at a time. Want to talk about it, make a plan, or both?"
 
     # ── Shared utility methods ──────────────────────────────────────
 
@@ -355,9 +433,15 @@ class LLMDispatcher:
             parts.append(f"goals: {goals}")
 
         if not parts:
-            return "I only have this session's conversation context so far. Share details you want me to remember long-term."
+            return (
+                "Honestly, I don't have much about you yet — we're just getting started! "
+                "I'd love to change that though. Tell me a bit about yourself — "
+                "your name, what you do, what's important to you. "
+                "The more I know, the better I can help you day-to-day 😊"
+            )
 
-        return "Here is what I currently have about you: " + " | ".join(parts)
+        name_greeting = f"Sure thing, {recalled_name}! " if recalled_name else ""
+        return name_greeting + "Here's what I remember about you:\n" + "\n".join(f"• {p}" for p in parts)
 
     @staticmethod
     def _is_data_request_text(lowered_text: str) -> bool:
@@ -412,7 +496,13 @@ class LLMDispatcher:
             "ALLOWED TOOLS: ['finance_tool', 'reminder_tool', 'calendar_tool', 'people_tool']\n"
             "ALLOWED ACTIONS: ['execute_tool', 'respond_conversationally', 'ask_clarification']\n"
             "SCHEMA: inferred_intent must be one of [financial_update, reminder_management, calendar_management, "
-            "people_memory_update, social_greeting, general_knowledge, other].\n"
+            "people_memory_update, social_greeting, general_knowledge, identity, name_declaration, "
+            "memory_query, recall_name, emotional_support, other].\n"
+            "IMPORTANT RULES:\n"
+            "- 'my name is X' or 'call me X' → identity intent, NO tool, respond_conversationally\n"
+            "- 'do you know me' or 'what memories' or 'what do you remember' → memory_query intent, NO tool\n"
+            "- 'who am i' or 'what is my name' → recall_name intent, NO tool\n"
+            "- people_tool is ONLY for storing/querying OTHER people (friends, family), NOT the user themselves\n"
             f"INPUT: {json.dumps(payload, ensure_ascii=True)}"
         )
 
@@ -471,7 +561,16 @@ class LLMDispatcher:
         support_cues = any(word in lowered for word in ("sad", "stressed", "overwhelmed", "anxious", "lonely", "down"))
         support_cues = support_cues or any(word in lowered for word in ("thak", "pareshan", "udas", "tension"))
 
-        data_request_cues = self._is_data_request_text(lowered) or "memories" in lowered or "memory" in lowered
+        memory_query_cues = any(
+            phrase in lowered
+            for phrase in (
+                "memories", "memory", "what do you remember", "what have we talked",
+                "what do you know about me", "do you know me", "do you remember me",
+                "who am i", "what is my name", "what's my name", "recall our",
+                "supermemory", "your memory", "in your memory",
+            )
+        )
+        data_request_cues = self._is_data_request_text(lowered) or memory_query_cues
         next_step_cues = bool(re.search(r"\b(what|which)\s+next\s+step\b", lowered)) or lowered in {
             "what next", "next step", "what now", "now what",
         }
@@ -534,11 +633,11 @@ class LLMDispatcher:
 
         semantic_match = self._semantic_match(user_text)
         if inferred_intent == "general_conversation":
-            if data_request_cues:
+            if data_request_cues or memory_query_cues:
                 inferred_intent = "self_data_request"
-                confidence = 0.82
+                confidence = 0.88
                 possible_actions = ["respond_with_memory_snapshot"]
-                rationale = "Detected request for stored user data."
+                rationale = "Detected request for stored user data or memory query."
             elif next_step_cues:
                 inferred_intent = "next_step_guidance"
                 confidence = 0.72
@@ -686,6 +785,9 @@ class LLMDispatcher:
             "compliment": conversational,
             "general_knowledge": conversational,
             "help_request": (["respond_conversationally", "offer_actions"], []),
+            "memory_query": (["respond_with_memory_snapshot"], []),
+            "recall_name": (["respond_with_memory_snapshot"], []),
+            "name_declaration": conversational,
             
             "check_balance": finance_actions,
             "transfer_money": finance_actions,

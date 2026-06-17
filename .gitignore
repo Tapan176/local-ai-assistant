@@ -7,9 +7,23 @@ __pycache__/
 # Virtual environments
 venv/
 .venv/
+env/
+ENV/
 
 # Environment and secrets
 .env
+.env.*
+!.env.example
+*.key
+*.pem
+!**/site-packages/**/*.pem
+secrets.*
+credentials.*
+*.secret
+*_secret.*
+*.credentials
+service-account*.json
+*-key.json
 
 # IDE
 .vscode/

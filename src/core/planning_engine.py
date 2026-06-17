@@ -53,11 +53,12 @@ class PlanningEngine:
     @staticmethod
     def _default_clarification(user_text: str, reasoning: ReasoningOutput) -> str:
         if reasoning.tool_candidates:
+            intent_friendly = reasoning.inferred_intent.replace("_", " ")
             return (
-                f"I can help with this as {reasoning.inferred_intent}. "
-                "Can you share one more detail so I apply the right action?"
+                f"I can help with {intent_friendly}! "
+                "Just need one more detail — what exactly would you like me to do?"
             )
         if len(user_text.split()) <= 3:
-            return "Can you expand that a bit so I can respond accurately?"
-        return "I want to make sure I got you right. What specific outcome do you want?"
+            return "Tell me a bit more so I can help you properly 😊"
+        return "I want to make sure I get this right for you. What's the specific outcome you're looking for?"
 

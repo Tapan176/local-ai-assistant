@@ -29,7 +29,7 @@ class Settings(BaseModel):
     # ── LLM Provider Chain: openrouter → ollama → bitnet → heuristic ────────
     llm_provider: str = "openrouter"
     ollama_url: str = "http://localhost:11434/api/chat"
-    ollama_model: str = "qwen2.5:7b"
+    ollama_model: str = "qwen3.5:9b"
     ollama_fallback_models: list[str] = Field(
         default=["llama3.2:3b", "phi3:mini"],
         description="Fallback Ollama models tried in order when primary fails",

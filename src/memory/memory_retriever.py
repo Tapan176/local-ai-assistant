@@ -30,6 +30,18 @@ class MemoryRetriever:
         semantic = await self.semantic_memory.retrieve(user_text, limit=self.max_items)
         persona = await self.persona_memory.get_profile()
 
+        # Enrich persona from Supermemory if local profile is thin
+        user_name = persona.get("preferences", {}).get("user_name", "")
+        if not user_name and user_text.strip():
+            persona_results = await self.supermemory.search_memory(
+                query=user_text, filters={"container_tag": "persona"}
+            )
+            if persona_results:
+                persona["supermemory_context"] = [
+                    r.get("content", str(r)) if isinstance(r, dict) else str(r)
+                    for r in persona_results[:3]
+                ]
+
         relations: list[dict] = []
         for entity in entities[:4]:
             results = await self.supermemory.search_memory(

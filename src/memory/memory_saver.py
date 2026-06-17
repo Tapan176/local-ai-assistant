@@ -34,18 +34,15 @@ class MemorySaver:
         tool_data: dict[str, Any] | None = None,
     ) -> None:
         await self.episodic_memory.add_turn(turn)
-        await self.semantic_memory.remember_text(
-            text=f"User: {turn.user_text}\nAssistant: {turn.assistant_text}",
-            metadata={"session_id": turn.session_id, "tool": turn.tool_used or ""},
-        )
 
         if reflection.should_store_semantic:
             for key, value in self._extract_semantic_facts(turn.user_text).items():
                 await self.semantic_memory.upsert_fact(key, value, confidence=0.8)
+                await self.semantic_memory.remember_text(
+                    text=f"{key}: {value}",
+                    metadata={"session_id": turn.session_id, "source": "reflection"}
+                )
             await self.semantic_memory.consolidate()
-
-        if tool_data:
-            await self._update_graph_from_tool(tool_data)
 
         await self.persona_memory.learn_from_text(turn.user_text)
         await self.persona_memory.evolve_from_reflection(
@@ -71,14 +68,3 @@ class MemorySaver:
             facts["user_goal"] = goal_match.group(1).strip()
 
         return facts
-
-    async def _update_graph_from_tool(self, tool_data: dict[str, Any]) -> None:
-        source = tool_data.get("source")
-        target = tool_data.get("target")
-        relation = tool_data.get("relation")
-        if source and target and relation:
-            await self.supermemory.add_memory(
-                content=f"{source} is {relation} of {target}",
-                container_tag="relationships",
-                metadata={"source": str(source), "target": str(target), "relation": str(relation)},
-            )

@@ -91,14 +91,7 @@ class PersonaMemory:
         )
 
     async def learn_from_text(self, text: str) -> None:
-        # Offload to Supermemory for rich context extraction
-        await self.supermemory.add_memory(
-            content=text,
-            container_tag="persona",
-            metadata={"type": "observation"}
-        )
-
-        # Also do local regex extraction for SQLite (instant recall)
+        # local regex extraction for SQLite (instant recall)
         lowered = text.lower().strip()
         preferences: dict[str, Any] = {}
         goals: dict[str, Any] = {}
@@ -128,6 +121,20 @@ class PersonaMemory:
 
         if preferences or goals:
             await self.update_profile(preferences=preferences or None, goals=goals or None)
+            
+            # Offload ONLY the extracted insight to Supermemory persona tag (prevent node duplication)
+            insight_parts = []
+            if preferences:
+                insight_parts.append(f"User preferences: {preferences}")
+            if goals:
+                insight_parts.append(f"User goals: {goals}")
+            
+            if insight_parts:
+                await self.supermemory.add_memory(
+                    content=" | ".join(insight_parts),
+                    container_tag="persona",
+                    metadata={"type": "observation"}
+                )
 
     async def search_context(self, query: str) -> list[dict[str, Any]]:
         """Search Supermemory for persona information."""

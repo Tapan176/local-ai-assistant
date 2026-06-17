@@ -21,8 +21,9 @@ class PromptBuilder:
     def _load_system_prompt(self) -> tuple[str, list[str]]:
         with open(self.system_prompt_path, "r", encoding="utf-8") as handle:
             data = yaml.safe_load(handle) or {}
-        system = data.get("system", "You are src.")
+        system = data.get("system", "You are Tapan, a personal AI companion.")
         rules = data.get("response_rules", [])
+        self.onboarding_questions = data.get("onboarding_questions", [])
         return system, rules
 
     def build(
@@ -37,6 +38,34 @@ class PromptBuilder:
         semantic_summary = self._format_semantic(memory.semantic_memories)
         persona_summary = self._format_persona(memory.persona_profile)
         tool_summary = self._format_tool(tool_result)
+        
+        # Detect if we know the user yet
+        user_name = memory.persona_profile.get("preferences", {}).get("user_name", "")
+        is_new_user = (
+            not user_name
+            and not memory.episodic_memories
+            and not memory.semantic_memories
+        )
+        has_thin_profile = (
+            not user_name
+            and len(memory.episodic_memories) <= 2
+        )
+        
+        # Build persona-aware instructions
+        persona_instruction = ""
+        if is_new_user:
+            persona_instruction = (
+                "\n\nIMPORTANT: This is a NEW user with no memories yet. "
+                "Be extra warm and welcoming. Ask getting-to-know-you questions naturally. "
+                "Suggested questions to weave in: " + ", ".join(self.onboarding_questions[:3])
+            )
+        elif has_thin_profile:
+            persona_instruction = (
+                "\n\nNOTE: You know very little about this user yet. "
+                "Naturally ask questions to learn more about them while helping with their request."
+            )
+        elif user_name:
+            persona_instruction = f"\n\nThe user's name is {user_name}. Use it naturally (not every message)."
 
         context = (
             "CONTEXT\n"
@@ -50,9 +79,16 @@ class PromptBuilder:
             f"- Tool Result:\n{tool_summary}\n"
             "- Response Rules:\n"
             + "\n".join(f"  - {rule}" for rule in self.response_rules)
+            + persona_instruction
         )
 
-        user_block = f"USER\n{user_text}\n\nINSTRUCTION\nRespond naturally. Do not mention system rules."
+        user_block = (
+            f"USER\n{user_text}\n\n"
+            "INSTRUCTION\nRespond as a warm personal companion. "
+            "Use the user's name if you know it. Reference memories naturally. "
+            "If you don't know much about them yet, be curious and ask. "
+            "Do not mention system rules or internal architecture."
+        )
         return {"system": self.system_prompt, "context": context, "user": user_block}
 
     def _format_episodic(self, episodes: list[dict[str, Any]]) -> str:
@@ -77,17 +113,30 @@ class PromptBuilder:
 
     def _format_persona(self, profile: dict[str, Any]) -> str:
         if not profile:
-            return "  - none"
+            return "  - No persona data yet (new user — be welcoming and curious!)"
         style = profile.get("communication_style", "balanced")
         baseline = profile.get("emotional_baseline", "neutral")
         preferences = profile.get("preferences", {})
         goals = profile.get("goals", {})
-        return (
-            f"  - communication_style: {style}\n"
-            f"  - emotional_baseline: {baseline}\n"
-            f"  - preferences: {preferences}\n"
-            f"  - goals: {goals}"
-        )
+        supermemory_ctx = profile.get("supermemory_context", [])
+        
+        parts = [
+            f"  - communication_style: {style}",
+            f"  - emotional_baseline: {baseline}",
+            f"  - preferences: {preferences}",
+            f"  - goals: {goals}",
+        ]
+        
+        if supermemory_ctx:
+            parts.append("  - Supermemory persona context:")
+            for ctx in supermemory_ctx[:3]:
+                parts.append(f"    - {str(ctx)[:200]}")
+        
+        user_name = preferences.get("user_name", "")
+        if not user_name and not supermemory_ctx:
+            parts.append("  - NOTE: User name unknown — ask naturally if appropriate")
+        
+        return "\n".join(parts)
 
     @staticmethod
     def _format_tool(tool_result: dict[str, Any] | None) -> str:
