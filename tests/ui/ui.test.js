@@ -10,6 +10,7 @@ const appJs = fs.readFileSync(ROOT + "app.js", "utf8");
 const settingsJs = fs.readFileSync(ROOT + "settings.js", "utf8");
 const integrationsJs = fs.readFileSync(ROOT + "settings-integrations.js", "utf8");
 const moneyJs = fs.readFileSync(ROOT + "money.js", "utf8");
+const moneySpendJs = fs.readFileSync(ROOT + "money-spend.js", "utf8");
 
 let failures = 0;
 const check = (name, cond, extra = "") => { console.log((cond ? "PASS " : "FAIL ") + name + (cond ? "" : "   " + extra)); if (!cond) failures++; };
@@ -80,6 +81,7 @@ function boot({ storage = {}, coarse = false, routes: extra = {}, url, ua, stand
   w.eval(settingsJs);
   w.eval(integrationsJs);
   w.eval(moneyJs);
+  w.eval(moneySpendJs);
   w.init();
   const $ = (id) => w.document.getElementById(id);
   return {
@@ -923,6 +925,264 @@ const authed = (t, s = t.sockets[t.sockets.length - 1]) => { t.open(s); t.say(s,
     check(`money: ${view} has no unnamed buttons and no unlabelled fields`, unnamed.length === 0 && unlabelled.length === 0, `${unnamed.length}/${unlabelled.length}`);
   }
   check("money: no inline event handlers or innerHTML-style injection anywhere in the script", !/innerHTML|insertAdjacentHTML|outerHTML|onclick=/.test(fs.readFileSync(ROOT + "money.js", "utf8")));
+
+
+  // ═══════════════ Money v2: queued ticks, payment kinds, auto-total, fixed amounts, bulk paid, groups, spending, subscriptions ═══════════════
+  const evt = (m, name) => new m.t.w.Event(name, { bubbles: true, cancelable: true });
+  const typeIn = (m, root, name, value) => { const el = root.querySelector(`[name="${name}"]`); el.value = value; el.dispatchEvent(evt(m, "input")); return el; };
+  const submitForm = async (m, form) => { form.dispatchEvent(evt(m, "submit")); await wait(80); };
+  const fkEl = (m, key) => [...m.t.$("panel-money").querySelectorAll("[data-fk]")].find((n) => n.dataset.fk === key);
+  const v2Pay = (over = {}) => ({ id: 3, title: "Car loan", category: "loan", notes: "", bank_id: 7, total_minor: 1200000, due_day: 5, remind_days: 1, kind: "emi", grp: "Home", settled_at: null, open_paid_minor: 0,
+    emi_count: 4, paid_count: 0, paid_minor: 0, planned_minor: 1200000, remaining_minor: 1200000, mismatch_minor: 0, next_due: "2026-12-05", finished: false, included: true,
+    emis: [mkEmi(21, 1, 300000, "2026-12-05", "upcoming", { custom: false }), mkEmi(22, 2, 300000, "2027-01-05", "upcoming", { custom: false }),
+           mkEmi(23, 3, 300000, "2027-02-05", "upcoming", { custom: false }), mkEmi(24, 4, 300000, "2027-03-05", "upcoming", { custom: true })], ...over });
+  function moneyBootV2({ pays, spend, subs, groups, excluded, hidden } = {}, specific = {}) {
+    const state = { pays: pays || [v2Pay()], delay: 0, spend: spend || null, subs: subs || null };
+    const snapNow = () => { const snap = moneySnap({ payments: state.pays }); return { ...snap, payments: state.pays, excluded: excluded || [], hidden: hidden || { payments: 0, overdue: 0 },
+      groups: groups || [{ name: "Home", label: "Home", payments: 1, active: 1, remaining_minor: 1200000, due_30_minor: 300000, overdue: 0, included: true }],
+      spending: { month: "2026-11", spent_minor: 450000, previous_minor: 300000, projected_minor: 600000, budget_minor: 500000, budget_left_minor: 50000, subs_monthly_minor: 64900, subs_yearly_minor: 778800, subs_active: 1, subs_due_7: 1 },
+      overview: { ...snap.overview, open: { count: 0, amount_minor: 0 } } }; };
+    state.snap = snapNow;
+    const holder = {};
+    const lastBody = () => { const writes = holder.t.calls.filter((c) => c.method !== "GET"); return JSON.parse(writes[writes.length - 1].body || "{}"); };
+    const slow = (value) => (state.delay ? new Promise((res) => setTimeout(() => res(value), state.delay)) : value);
+    const routes = m0Routes({
+      ...specific,
+      "GET /api/expenses/spending": () => state.spend,
+      "GET /api/expenses/subscriptions": () => state.subs,
+      "POST /api/expenses/spending": () => ({ id: 1 }), "PATCH /api/expenses/spending/": () => ({ id: 1 }), "DELETE /api/expenses/spending/": () => ({ ok: true }),
+      "PUT /api/expenses/budget": () => ({ budget_minor: 100 }),
+      "POST /api/expenses/subscriptions": () => ({ id: 5 }), "PATCH /api/expenses/subscriptions/": () => ({ id: 5 }), "DELETE /api/expenses/subscriptions/": () => ({ ok: true }),
+      "POST /api/expenses/emis/bulk": () => ({ changed: 2, skipped: 0 }),
+      "PATCH /api/expenses/payments/": () => ({ id: 3 }),
+      "PATCH /api/expenses/emis/": (url) => { const id = Number(url.split("/").pop()); const b = lastBody(); state.pays.forEach((p) => p.emis.forEach((e) => { if (e.id === id && b.paid !== undefined) { e.status = b.paid ? "paid" : "upcoming"; e.paid_at = b.paid ? "2026-11-24T10:00:00+00:00" : null; } })); return slow({ id }); },
+      "GET /api/expenses": () => snapNow(),
+      "POST /api/expenses/payments": () => ({ id: 99 }),
+      "POST /api/expenses/banks": () => ({ id: 8 }),
+    });
+    const t = boot({ drawer: true, routes }); holder.t = t; authed(t);
+    return { t, state, lastBody, calls: (method, prefix) => t.calls.filter((c) => c.method === method && c.url.startsWith(prefix)) };
+  }
+  const openPayCard = (m) => { m.t.$("panel-money").querySelectorAll("details.mn-pay").forEach((d) => { d.open = true; }); };
+
+  // ── the reported bug: ticking several EMIs quickly dropped all but the first ──
+  m = moneyBootV2(); m.state.delay = 60; await wait(60); await openMoney(m, "Payments"); openPayCard(m);
+  const ticks = () => [...m.t.$("panel-money").querySelectorAll(".mn-emi input[type=checkbox]")];
+  const getsBefore = m.calls("GET", "/api/expenses").length;
+  ticks()[0].click(); ticks()[1].click(); ticks()[2].click();
+  await wait(60 * 3 + 200);
+  const patches = m.calls("PATCH", "/api/expenses/emis/");
+  check("money v2: ticking three EMIs in a row sends three requests, one per EMI, in the order ticked", patches.length === 3 && patches.map((c) => c.url.split("/").pop()).join(",") === "21,22,23");
+  check("money v2: ...every one says paid", patches.every((c) => JSON.parse(c.body).paid === true));
+  check("money v2: ...the screen ends with all three ticked, from the server's truth", ticks().slice(0, 3).every((b) => b.checked) && !ticks()[3].checked);
+  check("money v2: ...and reloads once after the last save, not after each", m.calls("GET", "/api/expenses").length === getsBefore + 1, `${m.calls("GET", "/api/expenses").length - getsBefore}`);
+  m = moneyBootV2(); m.state.delay = 80; await wait(60); await openMoney(m, "Payments"); openPayCard(m);
+  const one = [...m.t.$("panel-money").querySelectorAll(".mn-emi input[type=checkbox]")][0];
+  one.click(); one.click(); await wait(300);
+  check("money v2: a second tap on the same EMI while it is still saving is ignored", m.calls("PATCH", "/api/expenses/emis/21").length === 1);
+
+  // ── add a payment: kinds ──
+  m = moneyBootV2(); await wait(60); await openMoney(m, "Payments"); mbtn(m, "+ Add payment").click(); await wait(10);
+  let af = () => m.t.$("panel-money").querySelector('form[aria-label="Add a payment"]');
+  check("money v2: the form starts as EMIs and offers all three kinds in plain words", af().querySelector('[name="kind"]').value === "emi" && [...af().querySelectorAll('[name="kind"] option')].map((o) => o.value).join(",") === "emi,due,open" && /No due date \(I pay when I can\)/.test(af().textContent));
+  const kindSel = af().querySelector('[name="kind"]'); kindSel.value = "due"; kindSel.dispatchEvent(evt(m, "input")); await wait(10);
+  check("money v2: a one-off due asks for the amount due and a date, not a number of EMIs", !!af().querySelector('[name="emi_amount"]') && !!af().querySelector('[name="first_due"]') && !af().querySelector('[name="emis"]') && /minimum due/.test(af().textContent));
+  typeIn(m, af(), "title", "Card bill"); typeIn(m, af(), "emi_amount", "1,500"); typeIn(m, af(), "total", "48000");
+  await submitForm(m, af());
+  let reqBody = JSON.parse(m.calls("POST", "/api/expenses/payments")[0].body);
+  check("money v2: creating a one-off sends kind, amount due, outstanding total and date", reqBody.kind === "due" && reqBody.emi_amount === "1,500" && reqBody.total === "48000" && /^\d{4}-\d\d-\d\d$/.test(reqBody.first_due) && reqBody.emis === undefined);
+
+  m = moneyBootV2(); await wait(60); await openMoney(m, "Payments"); mbtn(m, "+ Add payment").click(); await wait(10);
+  const kindSel2 = af().querySelector('[name="kind"]'); kindSel2.value = "open"; kindSel2.dispatchEvent(evt(m, "input")); await wait(10);
+  check("money v2: money owed with no date asks only for the amount: no date, bank or reminder", !!af().querySelector('[name="total"]') && !af().querySelector('[name="first_due"]') && !af().querySelector('[name="bank_id"]') && !af().querySelector('[name="remind"]') && /No date, no reminders/.test(af().textContent));
+  typeIn(m, af(), "title", "Owe Rahul"); typeIn(m, af(), "total", "5000"); typeIn(m, af(), "grp", "Personal");
+  await submitForm(m, af());
+  reqBody = JSON.parse(m.calls("POST", "/api/expenses/payments")[0].body);
+  check("money v2: creating an open payment sends kind, total, group and no reminder or bank", reqBody.kind === "open" && reqBody.total === "5000" && reqBody.grp === "Personal" && reqBody.remind_days === null && reqBody.bank_id === null && reqBody.first_due === undefined);
+
+  // ── auto total ──
+  m = moneyBootV2(); await wait(60); await openMoney(m, "Payments"); mbtn(m, "+ Add payment").click(); await wait(10);
+  typeIn(m, af(), "title", "Phone"); typeIn(m, af(), "emis", "4"); typeIn(m, af(), "total", "12000");
+  check("money v2: typing the total fills the amount of each EMI", af().querySelector('[name="emi_amount"]').value === "3000");
+  typeIn(m, af(), "emi_amount", "2500");
+  check("money v2: typing the amount of each EMI works out the total live", af().querySelector('[name="total"]').value === "10000" && /Total will be ₹10,000 \(4 × ₹2,500\)/.test(af().textContent));
+  typeIn(m, af(), "emis", "6");
+  check("money v2: changing the number of EMIs keeps the figure you typed last and updates the other", af().querySelector('[name="emi_amount"]').value === "2500" && af().querySelector('[name="total"]').value === "15000");
+  await submitForm(m, af());
+  reqBody = JSON.parse(m.calls("POST", "/api/expenses/payments")[0].body);
+  check("money v2: when the EMI amount drove, only it is sent (the server works out the total exactly)", reqBody.emi_amount === "2500" && reqBody.total === undefined && reqBody.emis === 6 && reqBody.kind === "emi");
+  m = moneyBootV2(); await wait(60); await openMoney(m, "Payments"); mbtn(m, "+ Add payment").click(); await wait(10);
+  typeIn(m, af(), "title", "T"); typeIn(m, af(), "emis", "3"); typeIn(m, af(), "total", "100"); await submitForm(m, af());
+  reqBody = JSON.parse(m.calls("POST", "/api/expenses/payments")[0].body);
+  check("money v2: when the total drove, only the total is sent", reqBody.total === "100" && reqBody.emi_amount === undefined);
+
+  // ── groups in the form ──
+  m = moneyBootV2(); await wait(60); await openMoney(m, "Payments"); mbtn(m, "+ Add payment").click(); await wait(10);
+  const groupInput = af().querySelector('[name="grp"]');
+  check("money v2: the group field suggests the groups you already have", groupInput.getAttribute("list") && [...af().querySelectorAll("datalist option")].map((o) => o.value).join(",") === "Home");
+
+  // ── fixed amounts ──
+  m = moneyBootV2(); await wait(60); await openMoney(m, "Payments"); openPayCard(m);
+  const chips = [...m.t.$("panel-money").querySelectorAll(".mn-chip")].filter((c) => c.textContent === "fixed");
+  check("money v2: an EMI whose amount you set carries a 'fixed' badge, and screen readers hear it", chips.length === 1 && chips[0].closest(".mn-emi").querySelector(".sr-only").textContent.includes("Amount is fixed"));
+  mbtn(m, "Spread equally").click(); await wait(60);
+  check("money v2: 'Spread equally' posts a rebalance with no reset", m.calls("POST", "/api/expenses/payments/3/rebalance").length === 1 && (m.calls("POST", "/api/expenses/payments/3/rebalance")[0].body === undefined));
+  check("money v2: with a fixed EMI the label says it is kept", /keep it/.test(mbtn(m, "Spread equally").getAttribute("aria-label")));
+  openPayCard(m);
+  mbtn(m, "Spread over all").click(); await wait(10);
+  check("money v2: 'Spread over all' (which replaces fixed amounts) needs a second tap", m.calls("POST", "/api/expenses/payments/3/rebalance").length === 1 && /Tap again to replace fixed amounts/.test(moneyText(m)));
+  openPayCard(m); mbtn(m, "Tap again to replace fixed amounts").click(); await wait(60);
+  check("money v2: ...and then sends reset:true", m.calls("POST", "/api/expenses/payments/3/rebalance").length === 2 && JSON.parse(m.calls("POST", "/api/expenses/payments/3/rebalance")[1].body).reset === true);
+
+  m = moneyBootV2({ pays: [v2Pay({ mismatch_minor: 50000 })] }); await wait(60); await openMoney(m, "Payments"); openPayCard(m);
+  check("money v2: the mismatch warning offers to spread and mentions the fixed EMI keeps its amount", /1 EMI with an amount you set keeps it/.test(moneyText(m)) && !!mbtn(m, "Spread the rest evenly"));
+
+  // ── editing an EMI: keep checkbox ──
+  m = moneyBootV2(); await wait(60); await openMoney(m, "Payments"); openPayCard(m);
+  mbtn(m, "Edit", m.t.$("panel-money").querySelectorAll(".mn-emi")[1]).click(); await wait(10);
+  let ef = () => m.t.$("panel-money").querySelector(".mn-emi-form");
+  const keepBox = () => fkEl(m, "edit-emi:22:keep");
+  check("money v2: the EMI form has a 'keep this amount' checkbox, off for an automatic EMI", !!keepBox() && keepBox().checked === false && /Keep this amount when I spread equally/.test(ef().textContent));
+  typeIn(m, ef(), "amount", "3500");
+  check("money v2: typing a new amount ticks 'keep' by itself, because a typed amount is a fixed one", keepBox().checked === true);
+  await submitForm(m, ef());
+  check("money v2: saving sends the amount and custom:true", m.lastBody().amount === "3500" && m.lastBody().custom === true);
+  m = moneyBootV2(); await wait(60); await openMoney(m, "Payments"); openPayCard(m);
+  mbtn(m, "Edit", m.t.$("panel-money").querySelectorAll(".mn-emi")[3]).click(); await wait(10);
+  check("money v2: a fixed EMI opens with 'keep' already on", fkEl(m, "edit-emi:24:keep").checked === true);
+  fkEl(m, "edit-emi:24:keep").click(); await wait(10);
+  typeIn(m, m.t.$("panel-money").querySelector(".mn-emi-form"), "amount", "2900");
+  check("money v2: once you choose, typing no longer overrides your choice", fkEl(m, "edit-emi:24:keep").checked === false);
+  await submitForm(m, m.t.$("panel-money").querySelector(".mn-emi-form"));
+  check("money v2: ...and unticked sends custom:false so the EMI rejoins the equal split", m.lastBody().custom === false && m.lastBody().amount === "2900");
+
+  // ── mark several paid ──
+  m = moneyBootV2({ pays: [v2Pay({ emis: [mkEmi(21, 1, 300000, "2026-11-01", "overdue", { custom: false }), mkEmi(22, 2, 300000, "2026-11-24", "today", { custom: false }),
+      mkEmi(23, 3, 300000, "2027-02-05", "upcoming", { custom: false }), mkEmi(24, 4, 300000, "2027-03-05", "upcoming", { custom: false })] })] });
+  await wait(60); await openMoney(m, "Payments"); openPayCard(m);
+  mbtn(m, "Mark several paid").click(); await wait(10);
+  const panel = () => m.t.$("panel-money").querySelector('[role="group"][aria-label^="Mark several EMIs"]');
+  check("money v2: the panel lists the unpaid EMIs with their dates", !!panel() && panel().querySelectorAll("li").length === 4 && /EMI 1 of 4 · ₹3,000/.test(panel().textContent) && /Overdue/.test(panel().textContent));
+  check("money v2: nothing is ticked yet and the action button is disabled and says what to do", mbtn(m, "Tick the EMIs to mark", panel()).disabled === true);
+  mbtn(m, "All due or overdue", panel()).click(); await wait(10);
+  check("money v2: 'All due or overdue' picks the overdue and today's EMIs and shows the total", [...panel().querySelectorAll("input:checked")].length === 2 && !!mbtn(m, "Mark 2 paid · ₹6,000", panel()));
+  mbtn(m, "Next 3", panel()).click(); await wait(10);
+  check("money v2: 'Next 3' picks the three earliest", [...panel().querySelectorAll("input:checked")].length === 3 && !!mbtn(m, "Mark 3 paid · ₹9,000", panel()));
+  panel().querySelectorAll("input")[0].click(); await wait(10);
+  check("money v2: ticking one by hand updates the count", !!mbtn(m, "Mark 2 paid · ₹6,000", panel()));
+  mbtn(m, "Mark 2 paid · ₹6,000", panel()).click(); await wait(80);
+  const bulk = m.calls("POST", "/api/expenses/emis/bulk")[0];
+  check("money v2: confirming posts the picked ids once, with the bank deduction preference", bulk && JSON.parse(bulk.body).ids.join(",") === "22,23" && JSON.parse(bulk.body).paid === true && JSON.parse(bulk.body).deduct === true);
+  check("money v2: the panel closes afterwards", !panel());
+  m = moneyBootV2(); await wait(60); await openMoney(m, "Payments"); openPayCard(m); mbtn(m, "Mark several paid").click(); await wait(10);
+  mbtn(m, "Cancel", panel()).click(); await wait(10);
+  check("money v2: Cancel closes the panel and sends nothing", !panel() && m.calls("POST", "/api/expenses/emis/bulk").length === 0);
+
+  // ── one-off due and open cards ──
+  const duePay = v2Pay({ id: 4, title: "Card bill", kind: "due", grp: "Cards", emi_count: 1, total_minor: 4800000, planned_minor: 150000, remaining_minor: 150000, mismatch_minor: 0,
+    emis: [mkEmi(31, 1, 150000, "2026-12-01", "upcoming", { custom: false })] });
+  const openPay = v2Pay({ id: 5, title: "Owe Rahul", kind: "open", grp: "Personal", bank_id: null, emi_count: 0, total_minor: 500000, planned_minor: 500000, paid_minor: 200000, open_paid_minor: 200000, remaining_minor: 300000, mismatch_minor: 0, next_due: null, emis: [] });
+  m = moneyBootV2({ pays: [duePay, openPay] }); await wait(60); await openMoney(m, "Payments"); openPayCard(m);
+  check("money v2: a one-off due reads as an amount due, not 'EMI 1 of 1', and has no EMI-only actions", /Amount due · ₹1,500/.test(moneyText(m)) && !/EMI 1 of 1/.test(moneyText(m)) && !mbtn(m, "+ EMI") && !mbtn(m, "Spread equally") && !mbtn(m, "Set one day for all"));
+  check("money v2: an open payment shows what is owed and no schedule", /₹3,000 owed · no due date/.test(moneyText(m)) && /Paid so far ₹2,000 of ₹5,000/.test(moneyText(m)) && m.t.$("panel-money").querySelectorAll('details[data-id="5"] .mn-emi').length === 0);
+  mbtn(m, "Record a payment").click(); await wait(10);
+  const opf = m.t.$("panel-money").querySelector('form[aria-label^="Record a payment towards"]');
+  typeIn(m, opf, "amount", "1,000"); await submitForm(m, opf);
+  check("money v2: recording a payment adds it to what was paid so far", m.lastBody().open_paid === "3000");
+  openPayCard(m); mbtn(m, "Mark settled").click(); await wait(60);
+  check("money v2: 'Mark settled' sends settled:true", m.lastBody().settled === true);
+
+  // ── groups on the overview ──
+  m = moneyBootV2({ groups: [{ name: "Home", label: "Home", payments: 1, active: 1, remaining_minor: 1200000, due_30_minor: 300000, overdue: 0, included: true },
+    { name: "~ungrouped", label: "Ungrouped", payments: 1, active: 1, remaining_minor: 500000, due_30_minor: 0, overdue: 0, included: true }] });
+  await wait(60); await openMoney(m);
+  check("money v2: with two groups the overview lists them with their figures", /Groups/.test(moneyText(m)) && /Home/.test(moneyText(m)) && /₹12,000 left/.test(moneyText(m)) && m.t.$("panel-money").querySelectorAll(".mn-group").length === 2);
+  fkEl(m, "group:Home").click(); await wait(80);
+  check("money v2: unticking a group asks the server for totals without it", m.calls("GET", "/api/expenses?exclude=home").length === 1);
+  check("money v2: ...and remembers the choice on this device", m.t.w.localStorage.getItem("tapan.money.exclude") === '["home"]');
+  m = moneyBootV2({ excluded: ["home"], hidden: { payments: 1, overdue: 2 } }, {}); m.t.w.localStorage.setItem("tapan.money.exclude", '["home"]'); await openMoney(m);
+  check("money v2: a remembered choice is sent on the first load", m.calls("GET", "/api/expenses?exclude=home").length >= 1);
+  check("money v2: hidden payments are admitted, with their overdue EMIs", /1 payment is left out of these totals, and 2 of their EMIs are overdue/.test(moneyText(m)));
+
+  // ── spending ──
+  const spendData = (over = {}) => ({ month: "2026-11", categories: ["food", "travel"], items: [
+      { id: 1, spent_on: "2026-11-23", amount_minor: 25050, category: "food", note: "Lunch", sub_id: null }, { id: 2, spent_on: "2026-11-20", amount_minor: 64900, category: "entertainment", note: "Netflix", sub_id: 5 }],
+    summary: { month: "2026-11", current: true, total_minor: 450000, count: 2, previous_total_minor: 300000, change_pct: 50, average_per_day_minor: 18750, projected_minor: 900000, days_in_month: 30, day_of_month: 24,
+      categories: [{ category: "food", amount_minor: 300000, count: 1, share: 67 }, { category: "travel", amount_minor: 150000, count: 1, share: 33 }], by_day: [],
+      top: [{ id: 1, spent_on: "2026-11-23", amount_minor: 300000, category: "food", note: "Rent share", sub_id: null }], budget_minor: 500000, budget_left_minor: 50000 }, ...over });
+  m = moneyBootV2({ spend: spendData() }); await wait(60); await openMoney(m, "Spending");
+  check("money v2: Spending shows the month, totals, change on last month and the pace", /November 2026/.test(moneyText(m)) && /₹4,500/.test(moneyText(m)) && /\+50% this month/.test(moneyText(m)) && /₹187\.5|₹188|₹187/.test(moneyText(m)) && /₹9,000/.test(moneyText(m)));
+  check("money v2: the category breakdown has text values", /Food/.test(moneyText(m)) && /₹3,000 · 67%/.test(moneyText(m)));
+  check("money v2: the budget bar is labelled with its figures", !!m.t.$("panel-money").querySelector('progress[aria-label="₹4,500 of your ₹5,000 budget"]') && /₹500 left/.test(moneyText(m)));
+  check("money v2: entries show note, date, category and amount", /Lunch/.test(moneyText(m)) && /₹250\.5/.test(moneyText(m)) && /Netflix/.test(moneyText(m)) && /subscription/.test(moneyText(m)));
+  check("money v2: 'Next month' is disabled on the current month", fkEl(m, "sp:next").disabled === true);
+  check("money v2: the add-expense form starts closed so the totals come first", !m.t.$("panel-money").querySelector('form[aria-label="Add what you spent"]') && !!mbtn(m, "+ Add expense"));
+  mbtn(m, "+ Add expense").click(); await wait(10);
+  check("money v2: opening it puts focus in the amount field", m.t.w.document.activeElement.dataset.fk === "add-spend:amount");
+  const sf = () => m.t.$("panel-money").querySelector('form[aria-label="Add what you spent"]');
+  typeIn(m, sf(), "amount", "250"); typeIn(m, sf(), "note", "Tea"); const catSel = sf().querySelector('[name="category"]'); catSel.value = "travel"; catSel.dispatchEvent(evt(m, "input"));
+  await submitForm(m, sf());
+  reqBody = JSON.parse(m.calls("POST", "/api/expenses/spending")[0].body);
+  check("money v2: adding an expense posts amount, category, note and date", reqBody.amount === "250" && reqBody.category === "travel" && reqBody.note === "Tea" && /^\d{4}-\d\d-\d\d$/.test(reqBody.spent_on));
+  check("money v2: the form stays open for the next entry, with the amount cleared, the category kept and focus back in the amount", sf().querySelector('[name="amount"]').value === "" && sf().querySelector('[name="category"]').value === "travel" && m.t.w.document.activeElement.dataset.fk === "add-spend:amount");
+  mbtn(m, "Done", sf()).click(); await wait(10);
+  check("money v2: 'Done' closes the add form", !sf() && !!mbtn(m, "+ Add expense"));
+  fkEl(m, "sp:prev").click(); await wait(80);
+  check("money v2: 'Previous month' asks for that month and focus stays on the button", m.calls("GET", "/api/expenses/spending?month=2026-10").length === 1 && m.t.w.document.activeElement.dataset.fk === "sp:prev");
+  const filt = fkEl(m, "sp:filter"); filt.value = "food"; filt.dispatchEvent(evt(m, "change")); await wait(80);
+  check("money v2: the category filter is sent to the server", m.calls("GET", "/api/expenses/spending?").some((c) => /category=food/.test(c.url)));
+  mbtn(m, "Set a budget") || mbtn(m, "Change budget"); (mbtn(m, "Change budget") || mbtn(m, "Set a budget")).click(); await wait(10);
+  const bf = m.t.$("panel-money").querySelector('form[aria-label="Monthly budget"]');
+  typeIn(m, bf, "amount", "30000"); await submitForm(m, bf);
+  check("money v2: saving a budget does a PUT with the amount", m.calls("PUT", "/api/expenses/budget").length === 1 && m.lastBody().amount === "30000");
+  mbtn(m, "Delete", m.t.$("panel-money").querySelectorAll(".sp-row")[0]).click(); await wait(10);
+  check("money v2: deleting an expense needs a second tap", m.calls("DELETE", "/api/expenses/spending/").length === 0);
+  mbtn(m, "Tap again to delete", m.t.$("panel-money").querySelectorAll(".sp-row")[0]).click(); await wait(60);
+  check("money v2: ...then deletes it", m.calls("DELETE", "/api/expenses/spending/1").length === 1);
+  m = moneyBootV2({ spend: spendData({ items: [], summary: { ...spendData().summary, total_minor: 0, count: 0, categories: [], top: [], budget_minor: null, budget_left_minor: null, projected_minor: null } }) }); await wait(60); await openMoney(m, "Spending");
+  check("money v2: an empty month explains how to add, including chat", /No expenses this month yet/.test(moneyText(m)) && /spent 250 on lunch/.test(moneyText(m)) && /Set a budget/.test(moneyText(m)));
+
+  // ── subscriptions ──
+  const sub = (o = {}) => ({ id: 5, name: "Netflix", amount_minor: 64900, cycle: "monthly", next_date: "2026-11-27", category: "entertainment", bank_id: 7, active: true, notes: "", remind_days: 1, monthly_minor: 64900, yearly_minor: 778800, days_until: 3, status: "soon", ...o });
+  const subsData = (list) => ({ subs: list, categories: ["entertainment"], cycles: ["monthly"], summary: { active: list.filter((s) => s.active).length, paused: list.filter((s) => !s.active).length, monthly_minor: 64900, yearly_minor: 778800, due_7: { count: 1, amount_minor: 64900 }, by_category: [{ category: "entertainment", monthly_minor: 64900 }] } });
+  m = moneyBootV2({ subs: subsData([sub(), sub({ id: 6, name: "Gym", amount_minor: 120000, cycle: "yearly", monthly_minor: 10000, active: false, status: "paused", days_until: 40, next_date: "2027-01-03" })]) });
+  await wait(60); await openMoney(m, "Subscriptions");
+  check("money v2: subscriptions show the monthly and yearly cost and what renews this week", /₹649/.test(moneyText(m)) && /₹7,788/.test(moneyText(m)) && /1 renewing/.test(moneyText(m)));
+  check("money v2: each one says when it renews, in words, with a status chip", /Renews in 3 days · 27 Nov 2026/.test(moneyText(m)) && /Renews soon/.test(moneyText(m)) && /Paused/.test(moneyText(m)) && /₹649 \/ month/.test(moneyText(m)));
+  check("money v2: a yearly plan also shows its monthly equivalent", /₹100 a month/.test(moneyText(m)));
+  mbtn(m, "Mark renewed").click(); await wait(80);
+  check("money v2: 'Mark renewed' posts, logs the spending, and takes the bank balance only if that preference is on", m.calls("POST", "/api/expenses/subscriptions/5/renew").length === 1 && JSON.parse(m.calls("POST", "/api/expenses/subscriptions/5/renew")[0].body).record === true && JSON.parse(m.calls("POST", "/api/expenses/subscriptions/5/renew")[0].body).deduct === true);
+  check("money v2: a paused subscription has no 'Mark renewed'", [...m.t.$("panel-money").querySelectorAll("button")].filter((b) => b.textContent === "Mark renewed").length === 1);
+  mbtn(m, "Pause").click(); await wait(60);
+  check("money v2: Pause sends active:false", m.lastBody().active === false);
+  mbtn(m, "Resume").click(); await wait(60);
+  check("money v2: Resume sends active:true", m.lastBody().active === true);
+  mbtn(m, "+ Add subscription").click(); await wait(10);
+  const subf = m.t.$("panel-money").querySelector('form[aria-label="Add a subscription"]');
+  typeIn(m, subf, "name", "Spotify"); typeIn(m, subf, "amount", "119"); const cyc = subf.querySelector('[name="cycle"]'); cyc.value = "yearly"; cyc.dispatchEvent(evt(m, "input"));
+  typeIn(m, subf, "next_date", "2026-12-15"); await submitForm(m, subf);
+  reqBody = JSON.parse(m.calls("POST", "/api/expenses/subscriptions").find((c) => c.url === "/api/expenses/subscriptions").body);
+  check("money v2: adding a subscription posts name, amount, cycle, date and reminder", reqBody.name === "Spotify" && reqBody.amount === "119" && reqBody.cycle === "yearly" && reqBody.next_date === "2026-12-15" && reqBody.remind_days === 1);
+  mbtn(m, "Delete").click(); await wait(10);
+  check("money v2: deleting a subscription needs a second tap and says the history stays", m.calls("DELETE", "/api/expenses/subscriptions/").length === 0 && /Tap again to delete/.test(moneyText(m)));
+  m = moneyBootV2({ subs: subsData([]) }); await wait(60); await openMoney(m, "Subscriptions");
+  check("money v2: with none, it suggests what to add", /No subscriptions yet/.test(moneyText(m)));
+
+  // ── navigation and accessibility across all five views ──
+  m = moneyBootV2({ spend: spendData(), subs: subsData([sub()]) }); await wait(60);
+  await openMoney(m);
+  check("money v2: five sections in a sensible order", [...m.t.$("panel-money").querySelectorAll(".mn-nav-btn")].map((b) => b.textContent).join(",") === "Overview,Payments,Spending,Subscriptions,Banks");
+  check("money v2: the overview links to spending and subscriptions with this month's figures", /Spent this month/.test(moneyText(m)) && /₹4,500/.test(moneyText(m)) && /₹649\/mo/.test(moneyText(m)) && !!mbtn(m, "Open spending") && !!mbtn(m, "Open subscriptions"));
+  mbtn(m, "Open subscriptions").click(); await wait(80);
+  check("money v2: those links open the right section and mark it as selected", m.t.$("panel-money").querySelector('.mn-nav-btn[aria-pressed="true"]').textContent === "Subscriptions");
+  for (const view of ["Overview", "Payments", "Spending", "Subscriptions", "Banks"]) {
+    await openMoney(m, view); await wait(60);
+    if (view === "Payments") openPayCard(m);
+    const unnamed2 = [...m.t.$("panel-money").querySelectorAll("button")].filter((b) => !(b.textContent.trim() || b.getAttribute("aria-label")));
+    const unlabelled2 = [...m.t.$("panel-money").querySelectorAll("input, select, textarea")].filter((i) => !(i.closest("label") || i.getAttribute("aria-label")));
+    check(`money v2: ${view} still has no unnamed buttons and no unlabelled fields`, unnamed2.length === 0 && unlabelled2.length === 0, `${unnamed2.length}/${unlabelled2.length}`);
+  }
+  check("money v2: neither Money script uses innerHTML-style injection or inline handlers", !/innerHTML|insertAdjacentHTML|outerHTML|onclick=/.test(fs.readFileSync(ROOT + "money-spend.js", "utf8")));
 
   console.log(failures ? `\n${failures} FAILED` : "\nALL UI TESTS PASSED");
   process.exit(failures ? 1 : 0);

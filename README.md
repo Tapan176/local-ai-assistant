@@ -82,14 +82,24 @@ always-on instance (`plan: starter`) or wake the server shortly before reminders
 - **Telegram** (works on iPhone too): create a bot with @BotFather, paste its token in *Settings > Telegram*, tap the link to pair.
   Reminders arrive there with Snooze buttons, and you can chat with the assistant. Only the paired chat is answered.
 
-## Money: payments, EMIs and banks
+## Money: payments, EMIs, spending and subscriptions
 
-The *Money* tab tracks what you have to pay and whether your banks can cover it.
+The *Money* tab tracks what you have to pay, what you spend and what renews, and whether your banks can cover it.
+Sections: Overview, Payments, Spending, Subscriptions, Banks.
 
 - **Payments with EMIs**: enter a title, total, number of EMIs and the first EMI date; every later EMI falls on the same day of
   each month (day 31 becomes the last day of shorter months). Every EMI then has its **own amount and date** you can edit, add or
   remove, and **one common day** can be applied to all unpaid EMIs at once. If your edits stop the EMIs adding up to the total,
-  it tells you by how much and offers to spread the rest evenly. One-off bills are simply a payment with 1 EMI.
+  it tells you by how much and offers to spread the rest evenly. **Spread equally keeps the EMIs whose amount you typed**
+  (they show a *fixed* badge) and splits only what is left over the other unpaid EMIs; paid EMIs are never touched, and
+  *Spread over all* replaces the fixed ones too. If you know the amount of each EMI, type that instead of the total and the
+  total is worked out.
+- **Three kinds of payment**: *EMIs*; *one payment with a due date* (for example a card's minimum due, with an optional
+  outstanding total); and *no due date* (money you owe someone and will pay when you can: never overdue, never reminded, can be
+  paid off in parts and then settled).
+- **Groups**: give payments a group such as "Home loan". On the Overview, untick a group to leave it out of the totals (the
+  choice is remembered on that device); bank shortfall warnings always count every payment.
+- **Mark several EMIs paid** in one go, or tick them one after another quickly: every tick is saved, in order.
 - **Mark paid / unpaid**: a tick box per EMI. Optionally the payment's bank balance is reduced when you tick it, and restored to
   the paisa when you untick.
 - **Banks**: the accounts you pay from, with the balance you enter (it never connects to a real bank). Money warns when the EMIs
@@ -100,7 +110,22 @@ The *Money* tab tracks what you have to pay and whether your banks can cover it.
 - **Reminders**: each upcoming EMI gets a normal reminder (9 am, by default the day before), so push and Telegram deliver it. The next
   12 EMIs of a payment have one; the window rolls forward as you pay.
 - **From chat**: "add a phone EMI of 24000 over 6 months from 5 Dec", "mark my car loan EMI paid", "what EMIs are due?".
-- **Export** every EMI as CSV. Money is stored as whole paise/cents, so a 36-EMI plan never drifts by a fraction.
+- **Spending**: a daily ledger (amount, category, note, date) with a month view: total, change on last month, per-day average,
+  projected month-end, split by category, and an optional monthly budget. From chat: "spent 250 on lunch".
+- **Subscriptions**: what renews and when, shown per month and per year. *Mark renewed* logs the charge as spending, can take
+  it off the bank balance, and moves the date forward without day-of-month drift (31 Jan, 28 Feb, 31 Mar). Each one keeps a
+  single reminder pointing at its next renewal; pausing removes it.
+- **Export** every EMI and all spending as CSV. Money is stored as whole paise/cents, so a 36-EMI plan never drifts by a fraction.
+
+Upgrading keeps your data: schema changes are additive only (new columns with defaults, new tables). The first time the new
+version reads existing payments it also protects EMI amounts you had edited by hand, inferred from the data, without
+changing any amount.
+
+## Weather
+
+Free providers with automatic fallback and no API keys: Open-Meteo, then MET Norway, then wttr.in (geocoding falls back to
+OpenStreetMap Nominatim). Shared hosting IPs get rate-limited by Open-Meteo (HTTP 429); a rate-limited provider is skipped for
+10 minutes instead of being retried. Requests carry a generic software User-Agent only, never your name or repository.
 
 ## Quick start (Windows)
 
@@ -162,8 +187,19 @@ app is Supabase-specific: any Postgres URI in `TAPAN_DATABASE_URL` works, and le
    `OPENROUTER_API_KEY` when prompted; copy the generated `TAPAN_API_TOKEN` afterwards. The UI asks for it once.
 3. Open the service URL, enter the token, talk to it.
 
-Free-plan caveats: the service sleeps when idle (first request after a nap is slow), and reminders that came due
-while asleep fire when it wakes. For on-time reminders switch `plan: free` to `starter` in `render.yaml`.
+Free-plan caveats: the service sleeps after about 15 minutes without traffic, and a sleeping server cannot deliver
+reminders. Keep it awake for free with a Supabase scheduled job that calls `/health` every 10 minutes (pg_cron + pg_net):
+
+```sql
+create extension if not exists pg_cron;
+create extension if not exists pg_net with schema extensions;
+select cron.schedule('keep-assistant-awake', '*/10 * * * *',
+  $$ select net.http_get(url := 'https://YOUR-SERVICE.onrender.com/health', timeout_milliseconds := 20000); $$);
+-- undo: select cron.unschedule('keep-assistant-awake');
+```
+
+One always-on free web service uses about 730 of Render's 750 free instance hours a month, so this only works if it is your
+only free service. For a guaranteed always-on server switch `plan: free` to `starter` in `render.yaml`.
 Supabase free projects also pause after a week with no activity. Local skills (files, apps) are automatically
 disabled when hosted, and the legacy SQLite-introspection verifier is disabled in Postgres mode.
 

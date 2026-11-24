@@ -229,3 +229,63 @@ async def test_the_overview_card_and_rules_mention_subscriptions(store, settings
     card = await spending.card(store, settings)
     assert card["subs_active"] == 1 and card["subs_monthly_minor"] == 64900 and card["subs_due_7"] == 1
     assert "649" in spending.card_insights(card, "INR")[0]["text"] and "a year" in spending.card_insights(card, "INR")[0]["text"]
+
+
+# ── chat skills ────────────────────────────────────────────────────────
+@pytest.fixture
+async def run(store, settings):
+    import httpx
+
+    from src.agent.skill import SkillContext
+    from src.agent.skills import build_registry
+
+    registry = build_registry(settings)
+    async with httpx.AsyncClient() as http:
+        ctx = SkillContext(settings=settings, store=store, http=http, session_id="t")
+
+        async def call(skill, **args):
+            return await registry.skills[skill].handler(ctx, args)
+        yield call
+
+
+async def test_the_new_skills_are_registered_with_valid_schemas(settings):
+    from src.agent.skills import build_registry
+
+    registry = build_registry(settings)
+    for name in ("log_expense", "spending_summary", "add_subscription", "add_owed_payment", "add_payment_plan"):
+        tool = registry.skills[name].to_openai_tool()
+        assert tool["function"]["name"] == name and tool["function"]["parameters"]["type"] == "object"
+    assert "emi_amount" in registry.skills["add_payment_plan"].to_openai_tool()["function"]["parameters"]["properties"]
+    assert registry.skills["add_payment_plan"].to_openai_tool()["function"]["parameters"]["required"] == ["title", "emis", "first_due_date"]
+
+
+async def test_chat_logs_an_expense_and_reports_the_month_and_budget(run, store, settings):
+    await spending.set_budget(store, 1000)
+    reply = await run("log_expense", amount=250, category="food", note="lunch")
+    assert "Logged ₹250 on food (lunch)" in reply and "This month so far: ₹250" in reply and "₹750 left of this month's budget" in reply
+    over = await run("log_expense", amount=900, category="travel")
+    assert "over this month's budget" in over and "₹150" in over
+    assert "more than zero" in await run("log_expense", amount=0)
+    assert "category must be one of" in await run("log_expense", amount=5, category="yachts")
+    summary = await run("spending_summary")
+    assert summary["spent"] == "₹1,150" and summary["entries"] == 2 and summary["budget"]["left"] == "-₹150"
+    assert [c["category"] for c in summary["by_category"]] == ["travel", "food"]
+    assert "must look like" in (await run("spending_summary", month="soon"))["error"]
+
+
+async def test_chat_adds_a_subscription_and_an_owed_payment(run, store, settings):
+    reply = await run("add_subscription", name="Netflix", amount=649, cycle="monthly", next_renewal_date=day(settings, 4))
+    assert "Tracking Netflix: ₹649 monthly" in reply and "remind you the day before" in reply
+    assert "billing cycle" in await run("add_subscription", name="X", amount=1, cycle="daily")
+    owed = await run("add_owed_payment", title="Owe Rahul", amount=5000, group="Personal")
+    assert "no due date" in owed and "no reminders" in owed
+    pay = (await expenses.snapshot(store, settings))["payments"][0]
+    assert pay["kind"] == "open" and pay["grp"] == "Personal" and pay["category"] == "personal"
+    summary = await run("expense_summary")
+    assert summary["owed_with_no_due_date"] == {"count": 1, "amount": "₹5,000"} and summary["payments"][0]["paid"] == "no schedule"
+
+
+async def test_chat_can_add_a_plan_from_the_emi_amount_and_a_group(run, store, settings):
+    reply = await run("add_payment_plan", title="Laptop", emi_amount=2500, emis=4, first_due_date=day(settings, 6), group="Gadgets")
+    assert "₹10,000 in 4 EMI(s)" in reply and "₹2,500 each" in reply
+    assert (await expenses.snapshot(store, settings))["payments"][0]["grp"] == "Gadgets"
