@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TAPAN_AI // Neural Interface</title>
+    <link rel="stylesheet" href="style.css">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700&family=Rajdhani:wght@300;400;600&display=swap"
+        rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+
+<body>
+    <div id="background-canvas"></div>
+
+    <div class="main-container">
+        <!-- Header -->
+        <header class="glass-panel">
+            <h1 class="neon-text">TAPAN_AI <span class="version">v1</span></h1>
+            <div class="status-indicator">
+                <span class="status-dot"></span>
+                <span class="status-text">ONLINE</span>
+            </div>
+        </header>
+
+        <!-- 3D Avatar / Visualizer Area -->
+        <div class="avatar-container">
+            <div id="avatar-canvas"></div>
+            <div class="audio-visualizer">
+                <canvas id="waveform"></canvas>
+            </div>
+        </div>
+
+        <!-- Chat Interface -->
+        <div class="chat-container glass-panel">
+            <div id="chat-history" class="scroller">
+                <div class="message assistant">
+                    <div class="bubble">System initializing... neural interface active. How may I assist you?</div>
+                </div>
+            </div>
+
+            <div class="input-area">
+                <button id="voice-toggle" class="icon-btn" title="Toggle Voice">
+                    <svg viewBox="0 0 24 24" width="24" height="24">
+                        <path fill="currentColor"
+                            d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
+                        <path fill="currentColor"
+                            d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
+                    </svg>
+                </button>
+                <input type="text" id="user-input" placeholder="Type a command or speak..." autocomplete="off">
+                <button id="send-btn" class="icon-btn">
+                    <svg viewBox="0 0 24 24" width="24" height="24">
+                        <path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hidden audio element for speech synthesis feedback if needed -->
+    <audio id="audio-feedback" style="display:none"></audio>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
