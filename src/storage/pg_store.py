@@ -67,10 +67,21 @@ _TABLES = {
     "ex_payments": """
         id BIGSERIAL PRIMARY KEY, title TEXT NOT NULL, category TEXT NOT NULL DEFAULT 'other',
         notes TEXT NOT NULL DEFAULT '', total_minor BIGINT NOT NULL, bank_id BIGINT, due_day INTEGER NOT NULL,
-        remind_days INTEGER, created_at TEXT NOT NULL, updated_at TEXT NOT NULL""",
+        remind_days INTEGER, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'emi', grp TEXT NOT NULL DEFAULT '', settled_at TEXT,
+        open_paid_minor BIGINT NOT NULL DEFAULT 0""",
     "ex_emis": """
         id BIGSERIAL PRIMARY KEY, payment_id BIGINT NOT NULL, seq INTEGER NOT NULL, amount_minor BIGINT NOT NULL,
-        due_date TEXT NOT NULL, paid_at TEXT, deducted_bank_id BIGINT, deducted_minor BIGINT, reminder_id BIGINT""",
+        due_date TEXT NOT NULL, paid_at TEXT, deducted_bank_id BIGINT, deducted_minor BIGINT, reminder_id BIGINT,
+        amount_custom INTEGER NOT NULL DEFAULT 0""",
+    "ex_spend": """
+        id BIGSERIAL PRIMARY KEY, spent_on TEXT NOT NULL, amount_minor BIGINT NOT NULL, category TEXT NOT NULL DEFAULT 'other',
+        note TEXT NOT NULL DEFAULT '', sub_id BIGINT, created_at TEXT NOT NULL""",
+    "ex_subs": """
+        id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL, amount_minor BIGINT NOT NULL, cycle TEXT NOT NULL DEFAULT 'monthly',
+        next_date TEXT NOT NULL, anchor_day INTEGER NOT NULL DEFAULT 1, category TEXT NOT NULL DEFAULT 'other', bank_id BIGINT,
+        active INTEGER NOT NULL DEFAULT 1, notes TEXT NOT NULL DEFAULT '', remind_days INTEGER, reminder_id BIGINT,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL""",
     "people": """
         id BIGSERIAL PRIMARY KEY, name TEXT UNIQUE NOT NULL, relationship TEXT NOT NULL DEFAULT '',
         notes TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL""",
@@ -88,10 +99,12 @@ _TABLES = {
         created_by TEXT NOT NULL DEFAULT 'system', description TEXT NOT NULL DEFAULT ''""",
     "notes": """
         id BIGSERIAL PRIMARY KEY, title TEXT NOT NULL DEFAULT '', body TEXT NOT NULL, tags TEXT NOT NULL DEFAULT '',
-        created_at TEXT NOT NULL, updated_at TEXT NOT NULL""",
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL, space TEXT NOT NULL DEFAULT 'general',
+        kind TEXT NOT NULL DEFAULT 'note', pinned INTEGER NOT NULL DEFAULT 0""",
     "tasks": """
         id BIGSERIAL PRIMARY KEY, title TEXT NOT NULL, due_at TEXT, priority TEXT NOT NULL DEFAULT 'normal',
-        status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, completed_at TEXT""",
+        status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, completed_at TEXT,
+        project TEXT NOT NULL DEFAULT '', details TEXT NOT NULL DEFAULT '', reminder_id BIGINT""",
     "memories": """
         id BIGSERIAL PRIMARY KEY, content TEXT NOT NULL, category TEXT NOT NULL DEFAULT 'general',
         created_at TEXT NOT NULL""",
@@ -105,13 +118,28 @@ _TABLES = {
         created_at TEXT NOT NULL""",
 }
 
-_MIGRATIONS = (("reminders", "recurrence", "TEXT"),)
+_MIGRATIONS = (
+    ("reminders", "recurrence", "TEXT"),
+    ("ex_payments", "kind", "TEXT NOT NULL DEFAULT 'emi'"),
+    ("ex_payments", "grp", "TEXT NOT NULL DEFAULT ''"),
+    ("ex_payments", "settled_at", "TEXT"),
+    ("ex_payments", "open_paid_minor", "BIGINT NOT NULL DEFAULT 0"),
+    ("ex_emis", "amount_custom", "INTEGER NOT NULL DEFAULT 0"),
+    ("notes", "space", "TEXT NOT NULL DEFAULT 'general'"),
+    ("notes", "kind", "TEXT NOT NULL DEFAULT 'note'"),
+    ("notes", "pinned", "INTEGER NOT NULL DEFAULT 0"),
+    ("tasks", "project", "TEXT NOT NULL DEFAULT ''"),
+    ("tasks", "details", "TEXT NOT NULL DEFAULT ''"),
+    ("tasks", "reminder_id", "BIGINT"),
+)
 
 _INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_episodes_session ON episodes(session_id, id)",
     "CREATE INDEX IF NOT EXISTS idx_reminders_status_due ON reminders(status, due_at)",
     "CREATE INDEX IF NOT EXISTS idx_ex_emis_payment ON ex_emis(payment_id, seq)",
     "CREATE INDEX IF NOT EXISTS idx_ex_emis_due ON ex_emis(due_date)",
+    "CREATE INDEX IF NOT EXISTS idx_ex_spend_day ON ex_spend(spent_on)",
+    "CREATE INDEX IF NOT EXISTS idx_notes_space ON notes(space, kind)",
 )
 
 

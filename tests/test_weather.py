@@ -1,4 +1,4 @@
-"""Weather: geocoding quirks of Open-Meteo, retries, caching, stale fallback, the stored home city, and the briefing."""
+"""Weather: geocoding quirks, provider fallback (Open-Meteo -> MET Norway -> wttr.in), caching, stale fallback, the home city, the briefing."""
 
 from __future__ import annotations
 
@@ -45,19 +45,70 @@ FORECAST = {
 }
 
 
+# Shapes copied from the real MET Norway (compact) and wttr.in (j1) responses, trimmed. Times are UTC, as MET sends them.
+def met_entry(time_utc, temp, symbol, pop=None, humidity=50.0, wind=2.0):
+    block = {"summary": {"symbol_code": symbol}, "details": {} if pop is None else {"probability_of_precipitation": pop}}
+    return {"time": time_utc, "data": {"instant": {"details": {"air_temperature": temp, "relative_humidity": humidity, "wind_speed": wind}},
+                                       "next_6_hours": block, "next_1_hours": {"summary": {"symbol_code": symbol}, "details": {}}}}
+
+
+MET = {"properties": {"timeseries": [
+    met_entry("2026-11-24T10:00:00Z", 30.0, "partlycloudy_day", 10, 44.0, 2.0),      # 15:30 in Kolkata, the 24th
+    met_entry("2026-11-24T18:00:00Z", 24.0, "clearsky_night"),                       # 23:30 on the 24th
+    met_entry("2026-11-24T19:00:00Z", 22.0, "clearsky_night"),                       # 00:30 on the 25th: a new LOCAL day
+    met_entry("2026-11-25T06:30:00Z", 29.0, "lightrainshowers_day", 60),             # 12:00 on the 25th
+]}}
+WTTR = {"current_condition": [{"temp_C": "31", "FeelsLikeC": "33", "humidity": "40", "windspeedKmph": "9", "weatherDesc": [{"value": "Sunny"}]}],
+        "weather": [{"date": "2026-11-24", "maxtempC": "32", "mintempC": "21",
+                     "hourly": [{"chanceofrain": "0"}, {"chanceofrain": "0"}, {"chanceofrain": "0"}, {"chanceofrain": "0"},
+                                {"chanceofrain": "20", "weatherDesc": [{"value": "Partly cloudy"}]}]}]}
+NOMINATIM = [{"name": "Surat", "lat": "21.1702", "lon": "72.8311", "display_name": "Surat, Gujarat, India",
+              "address": {"state": "Gujarat", "country": "India", "country_code": "in"}},
+             {"name": "Surat", "lat": "-27.1", "lon": "149.0", "display_name": "Surat, Queensland, Australia",
+              "address": {"state": "Queensland", "country": "Australia", "country_code": "au"}}]
+
+
 class FakeOpenMeteo:
     def __init__(self):
         self.geo_calls, self.forecast_calls = [], 0
         self.forecast_script: list = []        # consumed in order: ints are HTTP statuses, exceptions are raised, dicts are bodies, "badjson" is garbage
+        self.geo_status = 200                  # set to 429 to simulate the shared-IP rate limit that broke production
+        self.met_calls = self.wttr_calls = self.nominatim_calls = 0
+        self.met_script: list = []             # same scripting, for the fallbacks; by default they are "down" (503) so only Open-Meteo answers
+        self.wttr_script: list = []
+        self.nominatim_script: list = []
+        self.user_agents: dict[str, str] = {}
+
+    @staticmethod
+    def _reply(script: list, default) -> httpx.Response:
+        step = script.pop(0) if script else default
+        if isinstance(step, Exception):
+            raise step
+        if isinstance(step, int):
+            return httpx.Response(step, json={"reason": "x"})
+        return httpx.Response(200, json=step)
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
-        if request.url.host == "geocoding-api.open-meteo.com":
+        host = request.url.host
+        self.user_agents[host] = request.headers.get("user-agent", "")
+        if host == "api.met.no":
+            self.met_calls += 1
+            return self._reply(self.met_script, 503)
+        if host == "wttr.in":
+            self.wttr_calls += 1
+            return self._reply(self.wttr_script, 503)
+        if host == "nominatim.openstreetmap.org":
+            self.nominatim_calls += 1
+            return self._reply(self.nominatim_script, 503)
+        if host == "geocoding-api.open-meteo.com":
             name = request.url.params["name"]
             assert int(request.url.params["count"]) >= 5, "ranking needs more than one candidate"
             self.geo_calls.append(name)
+            if self.geo_status != 200:
+                return httpx.Response(self.geo_status, json={"reason": "x"})
             results = GEO.get(name)
             return httpx.Response(200, json={"results": results} if results else {"generationtime_ms": 0.2})
-        assert request.url.host == "api.open-meteo.com"
+        assert host == "api.open-meteo.com"
         self.forecast_calls += 1
         step = self.forecast_script.pop(0) if self.forecast_script else FORECAST
         if isinstance(step, Exception):
@@ -148,9 +199,10 @@ async def test_geocoding_is_cached(http, api):
 
 # ── resilience ──────────────────────────────────────────────────────
 async def test_transient_failures_are_retried(http, api):
-    api.forecast_script = [503, 429, FORECAST]
+    api.forecast_script = [503, httpx.ConnectTimeout("slow"), FORECAST]
     text = await weather.fetch_weather(http, "Mumbai", 2, KOLKATA)
     assert api.forecast_calls == 3 and text.startswith("Mumbai, Maharashtra, India: now 30.0°C")
+    assert api.met_calls == 0                                                    # the fallback is for a provider that stays down, not a blip
 
 
 async def test_forecast_is_cached_so_the_today_panel_does_not_hammer_the_api(http, api):
@@ -208,6 +260,110 @@ async def test_cache_is_bounded(http, api):
     for i in range(weather.CACHE_MAX + 20):
         weather._GEO.put(("k", i), {"x": i})
     assert len(weather._GEO._data) == weather.CACHE_MAX
+
+
+# ── provider fallback (the production failure: Open-Meteo answers 429 for every request from Render's shared IPs) ──
+async def test_rate_limited_primary_falls_back_to_met_norway(http, api):
+    api.forecast_script = [429]
+    api.met_script = [MET]
+    text = await weather.fetch_weather(http, "Mumbai", 2, KOLKATA)
+    assert "now 30.0°C" in text and "partly cloudy" in text and "humidity 44%" in text and "wind 7.2 km/h" in text
+    assert api.forecast_calls == 1 and api.met_calls == 1                       # 429 is not retried: it would only make the limit worse
+
+
+async def test_a_rate_limited_provider_is_skipped_for_the_cooldown_not_asked_again(http, api):
+    api.forecast_script = [429]
+    api.met_script = [MET, MET, MET]
+    await weather.fetch_weather(http, "Mumbai", 2, KOLKATA)
+    weather._FORECAST.clear()                                                    # force a refetch, as after the 10 minute cache
+    await weather.fetch_weather(http, "Mumbai", 2, KOLKATA)
+    await weather.fetch_weather(http, "Pune", 2, KOLKATA)
+    assert api.forecast_calls == 1 and api.met_calls == 3
+    weather._COOLDOWN["open-meteo"] = time.monotonic() - 1                       # cooldown over: the primary is tried again
+    weather._FORECAST.clear()
+    api.forecast_script = [FORECAST]
+    await weather.fetch_weather(http, "Mumbai", 2, KOLKATA)
+    assert api.forecast_calls == 2
+
+
+async def test_met_days_follow_the_local_calendar_not_utc(http, api):
+    api.forecast_script, api.met_script = [429], [MET]
+    place_ = {"name": "Mumbai", "admin1": "", "country": "", "latitude": 19.07, "longitude": 72.88, "timezone": KOLKATA}
+    data = await weather.forecast(http, place_, 2)
+    daily = data["daily"]
+    assert daily["time"] == ["2026-11-24", "2026-11-25"]
+    assert daily["temperature_2m_max"] == [30.0, 29.0] and daily["temperature_2m_min"] == [24.0, 22.0]   # 00:30 IST belongs to the 25th
+    assert daily["precipitation_probability_max"] == [10, 60]
+    assert daily["weather_code"] == [2, 80]                                      # partlycloudy_day -> 2, lightrainshowers_day -> 80
+
+
+@pytest.mark.parametrize("symbol,code", [
+    ("clearsky_day", 0), ("clearsky_night", 0), ("fair_polartwilight", 1), ("cloudy", 3), ("fog", 45), ("heavyrain", 65),
+    ("rainandthunder", 95), ("lightrainshowersandthunder_day", 95), ("snow", 73), ("heavysleetshowers_night", 67), ("brandnew_symbol", None),
+])
+def test_met_symbols_map_to_wmo_codes(symbol, code):
+    assert weather._met_code(symbol) == code
+
+
+async def test_wttr_is_the_last_resort_and_uses_its_own_description(http, api):
+    api.forecast_script = [429]
+    api.met_script = [503, 503, 503]
+    api.wttr_script = [WTTR]
+    text = await weather.fetch_weather(http, "Mumbai", 1, KOLKATA)
+    assert "now 31.0°C (feels 33.0°C), sunny, humidity 40%, wind 9.0 km/h" in text
+    assert "2026-11-24: 21.0–32.0°C, partly cloudy, rain chance 20%" in text
+
+
+async def test_all_providers_down_gives_the_first_providers_plain_message(http, api):
+    api.forecast_script = [503, 503, 503]
+    with pytest.raises(weather.WeatherError, match="busy or unreachable"):
+        await weather.fetch_weather(http, "Mumbai", 1, KOLKATA)
+    assert api.forecast_calls == 3 and api.met_calls == 3 and api.wttr_calls == 3  # each provider got its retries, then the next was tried
+
+
+async def test_garbage_from_a_fallback_is_an_error_not_a_crash(http, api):
+    api.forecast_script, api.met_script, api.wttr_script = [429], [{"properties": {"timeseries": []}}], [{"weather": []}]
+    with pytest.raises(weather.WeatherError):
+        await weather.fetch_weather(http, "Mumbai", 1, KOLKATA)
+
+
+async def test_stale_forecast_still_covers_a_total_outage_with_fallbacks_down_too(http, api):
+    await weather.fetch_weather(http, "Mumbai", 1, KOLKATA)
+    key = next(iter(weather._FORECAST._data))
+    _, _, value = weather._FORECAST._data[key]
+    weather._FORECAST._data[key] = (0, time.monotonic() - 1500, value)
+    api.forecast_script = [429]
+    text = await weather.fetch_weather(http, "Mumbai", 1, KOLKATA)
+    assert "this is from 25 min ago" in text
+
+
+async def test_geocoding_falls_back_to_nominatim_when_the_primary_is_rate_limited(http, api):
+    api.geo_status = 429
+    api.nominatim_script = [NOMINATIM]
+    got = await weather.geocode(http, "Surat, India", KOLKATA)
+    assert got["name"] == "Surat" and got["country"] == "India" and abs(got["latitude"] - 21.1702) < 1e-6
+    assert got["timezone"] == KOLKATA                                            # Nominatim has no zone: the user's own is the best guess
+    await weather.geocode(http, "Surat, India", KOLKATA)                         # cached: neither service is asked again
+    assert api.nominatim_calls == 1 and api.geo_calls == ["surat"]
+
+
+async def test_geocode_unknown_place_does_not_fall_back_and_unavailable_is_distinct(http, api):
+    with pytest.raises(weather.WeatherError, match="couldn't find a place called “Atlantis”"):
+        await weather.geocode(http, "Atlantis")
+    assert api.nominatim_calls == 0                                              # the geocoder answered; the fallback would only guess
+    api.geo_status = 503
+    with pytest.raises(weather.WeatherError, match="busy or unreachable"):
+        await weather.geocode(http, "Surat")                                     # both geocoders down (nominatim defaults to 503)
+
+
+async def test_requests_to_third_parties_identify_the_software_never_the_user(http, api):
+    api.forecast_script, api.met_script = [429], [MET]
+    await weather.fetch_weather(http, "Mumbai", 1, KOLKATA)
+    api.geo_status, api.nominatim_script = 429, [NOMINATIM]
+    await weather.geocode(http, "Surat", KOLKATA)
+    for host in ("api.met.no", "nominatim.openstreetmap.org"):
+        agent = api.user_agents[host].lower()
+        assert agent.startswith("personal-assistant-weather/") and "tapan" not in agent and "@" not in agent and "github" not in agent
 
 
 # ── skills ──────────────────────────────────────────────────────────

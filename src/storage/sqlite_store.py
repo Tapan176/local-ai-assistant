@@ -84,7 +84,11 @@ CREATE TABLE IF NOT EXISTS ex_payments (
     due_day INTEGER NOT NULL,
     remind_days INTEGER,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'emi',
+    grp TEXT NOT NULL DEFAULT '',
+    settled_at TEXT,
+    open_paid_minor INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS ex_emis (
@@ -96,10 +100,39 @@ CREATE TABLE IF NOT EXISTS ex_emis (
     paid_at TEXT,
     deducted_bank_id INTEGER,
     deducted_minor INTEGER,
-    reminder_id INTEGER
+    reminder_id INTEGER,
+    amount_custom INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_ex_emis_payment ON ex_emis(payment_id, seq);
 CREATE INDEX IF NOT EXISTS idx_ex_emis_due ON ex_emis(due_date);
+
+CREATE TABLE IF NOT EXISTS ex_spend (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    spent_on TEXT NOT NULL,
+    amount_minor INTEGER NOT NULL,
+    category TEXT NOT NULL DEFAULT 'other',
+    note TEXT NOT NULL DEFAULT '',
+    sub_id INTEGER,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ex_spend_day ON ex_spend(spent_on);
+
+CREATE TABLE IF NOT EXISTS ex_subs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    amount_minor INTEGER NOT NULL,
+    cycle TEXT NOT NULL DEFAULT 'monthly',
+    next_date TEXT NOT NULL,
+    anchor_day INTEGER NOT NULL DEFAULT 1,
+    category TEXT NOT NULL DEFAULT 'other',
+    bank_id INTEGER,
+    active INTEGER NOT NULL DEFAULT 1,
+    notes TEXT NOT NULL DEFAULT '',
+    remind_days INTEGER,
+    reminder_id INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS people (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -203,7 +236,20 @@ CREATE TABLE IF NOT EXISTS state_checkpoints (
 
 
 # (table, column, column definition) added after the first release; applied to databases created before them.
-MIGRATIONS = (("reminders", "recurrence", "TEXT"),)
+MIGRATIONS = (
+    ("reminders", "recurrence", "TEXT"),
+    ("ex_payments", "kind", "TEXT NOT NULL DEFAULT 'emi'"),
+    ("ex_payments", "grp", "TEXT NOT NULL DEFAULT ''"),
+    ("ex_payments", "settled_at", "TEXT"),
+    ("ex_payments", "open_paid_minor", "INTEGER NOT NULL DEFAULT 0"),
+    ("ex_emis", "amount_custom", "INTEGER NOT NULL DEFAULT 0"),
+    ("notes", "space", "TEXT NOT NULL DEFAULT 'general'"),
+    ("notes", "kind", "TEXT NOT NULL DEFAULT 'note'"),
+    ("notes", "pinned", "INTEGER NOT NULL DEFAULT 0"),
+    ("tasks", "project", "TEXT NOT NULL DEFAULT ''"),
+    ("tasks", "details", "TEXT NOT NULL DEFAULT ''"),
+    ("tasks", "reminder_id", "INTEGER"),
+)
 
 
 class SQLiteStore:

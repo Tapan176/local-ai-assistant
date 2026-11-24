@@ -434,7 +434,7 @@ async def test_csv_export_neutralises_spreadsheet_formulas(store, settings):
     await make(store, settings, title="+cmd", total=100, emis=1)
     out = await expenses.export_csv(store, settings)
     lines = out.strip().splitlines()
-    assert lines[0].startswith("payment,category,bank,emi_number")
+    assert lines[0].startswith("payment,group,kind,category,bank,emi_number")
     assert "\n=" not in "\n" + out and "'=HYPERLINK" in out and "'+cmd" in out
 
 

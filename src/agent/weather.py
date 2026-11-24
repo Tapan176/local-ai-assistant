@@ -1,4 +1,9 @@
-"""Weather via Open-Meteo (free, no API key): forgiving geocoding, retries, caching, and a home city you can set in chat.
+"""Weather from free, key-less providers with automatic fallback: forgiving geocoding, caching, and a home city set in chat.
+
+Providers, tried in order: Open-Meteo, then MET Norway (api.met.no), then wttr.in. On Render, Open-Meteo answers 429 for
+every request because the egress IPs are shared by many apps, so a single provider is not enough. A 429 puts that provider
+on a 10 minute cooldown instead of being retried (retrying a rate limit only makes it worse); every provider's answer is
+converted to Open-Meteo's shape so the formatting code does not care where it came from.
 
 Why this is more than two HTTP calls
 - Open-Meteo's geocoder matches a bare *name* only. "Surat, India" or "Pune 411001" fail, "Bangalore" resolves to a town in
@@ -16,11 +21,19 @@ import json
 import time
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 
 GEO_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+MET_URL = "https://api.met.no/weatherapi/locationforecast/2.0/compact"
+WTTR_URL = "https://wttr.in/{lat},{lon}"
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+# MET Norway and Nominatim require an identifying User-Agent. It names the software only: no person, repo or contact.
+USER_AGENT = {"User-Agent": "personal-assistant-weather/1.0"}
+COOLDOWN_SECONDS = 600
+_COOLDOWN: dict[str, float] = {}
 
 RETRY_DELAYS = (0.5, 1.5)               # seconds between attempts; tests patch this to zero
 GEO_TTL = 24 * 3600
@@ -59,6 +72,10 @@ class WeatherError(Exception):
     """Carries a message that is safe and useful to show to the user (and to the model)."""
 
 
+class RateLimited(WeatherError):
+    """HTTP 429: do not retry this provider for a while."""
+
+
 class _TTLCache:
     def __init__(self, ttl: float) -> None:
         self.ttl = ttl
@@ -95,6 +112,11 @@ _FORECAST = _TTLCache(FORECAST_TTL)
 def clear_caches() -> None:
     _GEO.clear()
     _FORECAST.clear()
+    _COOLDOWN.clear()
+
+
+def _cooling(name: str) -> bool:
+    return _COOLDOWN.get(name, 0) > time.monotonic()
 
 
 def _norm(text: str) -> str:
@@ -106,13 +128,19 @@ def is_placeholder(location: str | None) -> bool:
 
 
 # ── HTTP with retries ───────────────────────────────────────────────
-async def _get_json(http: httpx.AsyncClient, url: str, params: dict[str, Any]) -> dict[str, Any]:
+BUSY = "The weather service is busy or unreachable right now. Try again in a minute."
+
+
+async def _get_json(http: httpx.AsyncClient, url: str, params: dict[str, Any] | None = None, *, headers: dict[str, str] | None = None) -> dict[str, Any]:
+    """GET and decode JSON. A top-level list is returned as {"_list": [...]}."""
     for attempt in range(len(RETRY_DELAYS) + 1):
         try:
-            resp = await http.get(url, params=params, timeout=10.0)
+            resp = await http.get(url, params=params, headers=headers, timeout=10.0)
         except httpx.TransportError:                                 # timeouts, DNS, connection resets
             pass
         else:
+            if resp.status_code == 429:
+                raise RateLimited(BUSY)
             if resp.status_code == 200:
                 try:
                     data = resp.json()
@@ -120,12 +148,14 @@ async def _get_json(http: httpx.AsyncClient, url: str, params: dict[str, Any]) -
                     raise WeatherError("The weather service sent an unreadable response. Try again shortly.") from None
                 if isinstance(data, dict):
                     return data
+                if isinstance(data, list):
+                    return {"_list": data}
                 raise WeatherError("The weather service sent an unexpected response. Try again shortly.")
-            if resp.status_code not in (429, 500, 502, 503, 504):
+            if resp.status_code not in (500, 502, 503, 504):
                 raise WeatherError(f"The weather service rejected the request (HTTP {resp.status_code}).")
         if attempt < len(RETRY_DELAYS):
             await asyncio.sleep(RETRY_DELAYS[attempt])
-    raise WeatherError("The weather service is busy or unreachable right now. Try again in a minute.")
+    raise WeatherError(BUSY)
 
 
 # ── geocoding ───────────────────────────────────────────────────────
@@ -184,38 +214,204 @@ async def geocode(http: httpx.AsyncClient, query: str, tz_hint: str = "") -> dic
     cached = _GEO.get(key)
     if cached:
         return cached
-    for name in _name_candidates(parts[0], tz_hint):
-        data = await _get_json(http, GEO_URL, {"name": name, "count": 10, "language": "en"})
-        results = [r for r in (data.get("results") or []) if isinstance(r, dict) and "latitude" in r and "longitude" in r]
-        if results:
-            place = _place(_pick(results, name, qualifiers, tz_hint))
-            _GEO.put(key, place)
-            return place
-    raise WeatherError(f"I couldn't find a place called “{cleaned}”. Try just the city, like “Surat” or “Surat, India”.")
+    not_found = WeatherError(f"I couldn't find a place called “{cleaned}”. Try just the city, like “Surat” or “Surat, India”.")
+    primary_failed = _cooling("open-meteo-geo")
+    if not primary_failed:
+        try:
+            for name in _name_candidates(parts[0], tz_hint):
+                data = await _get_json(http, GEO_URL, {"name": name, "count": 10, "language": "en"})
+                results = [r for r in (data.get("results") or []) if isinstance(r, dict) and "latitude" in r and "longitude" in r]
+                if results:
+                    place = _place(_pick(results, name, qualifiers, tz_hint))
+                    _GEO.put(key, place)
+                    return place
+        except RateLimited:
+            _COOLDOWN["open-meteo-geo"] = time.monotonic() + COOLDOWN_SECONDS
+            primary_failed = True
+        except WeatherError:
+            primary_failed = True
+        else:
+            raise not_found                                           # the geocoder answered and does not know it: no fallback
+    # The primary geocoder is rate limited or down: Nominatim (OpenStreetMap) needs no key and the lookup is cached for a day.
+    try:
+        place = await _geocode_nominatim(http, parts[0], qualifiers, tz_hint)
+    except WeatherError:
+        raise WeatherError(BUSY) from None
+    if place is None:
+        raise not_found
+    _GEO.put(key, place)
+    return place
+
+
+async def _geocode_nominatim(http: httpx.AsyncClient, name: str, qualifiers: list[str], tz_hint: str) -> dict[str, Any] | None:
+    query = _name_candidates(name, tz_hint)[0]
+    data = await _get_json(http, NOMINATIM_URL, {"q": query, "format": "jsonv2", "limit": 10, "addressdetails": 1, "accept-language": "en"}, headers=USER_AGENT)
+    results = []
+    for row in data.get("_list") or []:
+        if not isinstance(row, dict) or "lat" not in row or "lon" not in row:
+            continue
+        addr = row.get("address") or {}
+        results.append({
+            "name": row.get("name") or str(row.get("display_name", "")).split(",")[0], "admin1": addr.get("state", ""),
+            "country": addr.get("country", ""), "country_code": str(addr.get("country_code", "")).upper(),
+            "latitude": row["lat"], "longitude": row["lon"], "timezone": tz_hint or "UTC", "population": None,
+        })
+    return _place(_pick(results, query, qualifiers, tz_hint)) if results else None
 
 
 # ── forecast ────────────────────────────────────────────────────────
+async def _open_meteo(http: httpx.AsyncClient, place: dict[str, Any], days: int) -> dict[str, Any]:
+    return await _get_json(http, FORECAST_URL, {
+        "latitude": place["latitude"], "longitude": place["longitude"],
+        "current": "temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code",
+        "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code",
+        "timezone": "auto", "forecast_days": days,
+    })
+
+
+# MET Norway symbol -> the nearest WMO code (so one table describes the weather whichever provider answered).
+_MET_CODES = {
+    "clearsky": 0, "fair": 1, "partlycloudy": 2, "cloudy": 3, "fog": 45,
+    "lightrain": 61, "rain": 63, "heavyrain": 65, "lightrainshowers": 80, "rainshowers": 81, "heavyrainshowers": 82,
+    "lightsleet": 66, "sleet": 67, "heavysleet": 67, "lightsleetshowers": 66, "sleetshowers": 67, "heavysleetshowers": 67,
+    "lightsnow": 71, "snow": 73, "heavysnow": 75, "lightsnowshowers": 85, "snowshowers": 85, "heavysnowshowers": 86,
+}
+
+
+def _met_code(symbol: Any) -> int | None:
+    if not isinstance(symbol, str) or not symbol:
+        return None
+    base = symbol.rsplit("_", 1)[0] if symbol.endswith(("_day", "_night", "_polartwilight")) else symbol
+    if "thunder" in base:
+        return 95
+    return _MET_CODES.get(base)
+
+
+def _met_to_open_meteo(data: dict[str, Any], tz_name: str, days: int) -> dict[str, Any]:
+    series = (data.get("properties") or {}).get("timeseries")
+    if not isinstance(series, list) or not series:
+        raise WeatherError("The weather service sent incomplete data. Try again shortly.")
+    try:
+        tz = ZoneInfo(tz_name or "UTC")
+    except Exception:  # noqa: BLE001 - an unknown zone name must not break the forecast
+        tz = ZoneInfo("UTC")
+    first = series[0].get("data") or {}
+    now = first.get("instant", {}).get("details") or {}
+    summary = (first.get("next_1_hours") or first.get("next_6_hours") or {}).get("summary") or {}
+    wind = now.get("wind_speed")
+    current = {
+        "temperature_2m": now.get("air_temperature"), "apparent_temperature": None,
+        "relative_humidity_2m": None if now.get("relative_humidity") is None else round(now["relative_humidity"]),
+        "wind_speed_10m": None if wind is None else round(wind * 3.6, 1), "weather_code": _met_code(summary.get("symbol_code")),
+    }
+    per_day: dict[str, dict[str, Any]] = {}
+    for entry in series:
+        try:
+            local = datetime.fromisoformat(str(entry["time"]).replace("Z", "+00:00")).astimezone(tz)
+        except (KeyError, ValueError):
+            continue
+        details = (entry.get("data") or {}).get("instant", {}).get("details") or {}
+        bucket = per_day.setdefault(local.date().isoformat(), {"temps": [], "pop": [], "symbol": None, "gap": 99})
+        if details.get("air_temperature") is not None:
+            bucket["temps"].append(details["air_temperature"])
+        block = (entry.get("data") or {}).get("next_6_hours") or (entry.get("data") or {}).get("next_1_hours") or {}
+        pop = (block.get("details") or {}).get("probability_of_precipitation")
+        if pop is not None:
+            bucket["pop"].append(pop)
+        symbol = (block.get("summary") or {}).get("symbol_code")
+        if symbol and abs(local.hour - 12) < bucket["gap"]:           # the symbol nearest midday describes the day
+            bucket["symbol"], bucket["gap"] = symbol, abs(local.hour - 12)
+    dates = sorted(per_day)[:days]
+    return {"current": current, "daily": {
+        "time": dates,
+        "temperature_2m_max": [max(per_day[d]["temps"]) if per_day[d]["temps"] else None for d in dates],
+        "temperature_2m_min": [min(per_day[d]["temps"]) if per_day[d]["temps"] else None for d in dates],
+        "precipitation_probability_max": [max(per_day[d]["pop"]) if per_day[d]["pop"] else None for d in dates],
+        "weather_code": [_met_code(per_day[d]["symbol"]) for d in dates],
+    }}
+
+
+async def _met_norway(http: httpx.AsyncClient, place: dict[str, Any], days: int) -> dict[str, Any]:
+    data = await _get_json(http, MET_URL, {"lat": round(place["latitude"], 4), "lon": round(place["longitude"], 4)}, headers=USER_AGENT)
+    return _met_to_open_meteo(data, place.get("timezone", ""), days)
+
+
+def _to_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_int(value: Any) -> int | None:
+    number = _to_float(value)
+    return None if number is None else round(number)
+
+
+def _wttr_to_open_meteo(data: dict[str, Any], days: int) -> dict[str, Any]:
+    now_list, day_list = data.get("current_condition"), data.get("weather")
+    if not isinstance(now_list, list) or not now_list or not isinstance(day_list, list) or not day_list:
+        raise WeatherError("The weather service sent incomplete data. Try again shortly.")
+
+    def text(item: Any) -> str | None:
+        values = item.get("weatherDesc") if isinstance(item, dict) else None
+        return str(values[0].get("value", "")).strip().lower() or None if isinstance(values, list) and values and isinstance(values[0], dict) else None
+
+    now = now_list[0]
+    current = {
+        "temperature_2m": _to_float(now.get("temp_C")), "apparent_temperature": _to_float(now.get("FeelsLikeC")),
+        "relative_humidity_2m": _to_int(now.get("humidity")), "wind_speed_10m": _to_float(now.get("windspeedKmph")),
+        "weather_code": None, "description": text(now),
+    }
+    rows = [d for d in day_list if isinstance(d, dict)][:days]
+    def noon(day: dict[str, Any]) -> dict[str, Any]:                  # the 12:00 slot describes the day
+        hourly = day.get("hourly")
+        return hourly[4] if isinstance(hourly, list) and len(hourly) > 4 and isinstance(hourly[4], dict) else {}
+
+    return {"current": current, "daily": {
+        "time": [d.get("date") for d in rows],
+        "temperature_2m_max": [_to_float(d.get("maxtempC")) for d in rows],
+        "temperature_2m_min": [_to_float(d.get("mintempC")) for d in rows],
+        "precipitation_probability_max": [max([_to_int(h.get("chanceofrain")) or 0 for h in d.get("hourly") or [{}]]) for d in rows],
+        "weather_code": [None for _ in rows], "description": [text(noon(d)) for d in rows],
+    }}
+
+
+async def _wttr(http: httpx.AsyncClient, place: dict[str, Any], days: int) -> dict[str, Any]:
+    url = WTTR_URL.format(lat=round(place["latitude"], 3), lon=round(place["longitude"], 3))
+    return _wttr_to_open_meteo(await _get_json(http, url, {"format": "j1", "lang": "en"}, headers=USER_AGENT), days)
+
+
+PROVIDERS = (("open-meteo", _open_meteo), ("met-norway", _met_norway), ("wttr.in", _wttr))
+
+
 async def forecast(http: httpx.AsyncClient, place: dict[str, Any], days: int = 3) -> dict[str, Any]:
     key = (round(place["latitude"], 2), round(place["longitude"], 2), days)
     fresh = _FORECAST.get(key)
     if fresh:
         return fresh
-    try:
-        data = await _get_json(http, FORECAST_URL, {
-            "latitude": place["latitude"], "longitude": place["longitude"],
-            "current": "temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code",
-            "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code",
-            "timezone": "auto", "forecast_days": days,
-        })
-        if not isinstance(data.get("current"), dict) or not isinstance(data.get("daily"), dict):
-            raise WeatherError("The weather service sent incomplete data. Try again shortly.")
-    except WeatherError:
-        stale = _FORECAST.get(key, max_age=STALE_OK_SECONDS)       # service down: yesterday's-quality beats nothing, and we say so
-        if stale:
-            return {**stale, "_age_minutes": int((_FORECAST.age(key) or 0) / 60)}
-        raise
-    _FORECAST.put(key, data)
-    return data
+    first_error: WeatherError | None = None
+    for name, fetch in PROVIDERS:
+        if _cooling(name):
+            continue
+        try:
+            data = await fetch(http, place, days)
+            if not isinstance(data.get("current"), dict) or not isinstance(data.get("daily"), dict):
+                raise WeatherError("The weather service sent incomplete data. Try again shortly.")
+        except RateLimited as exc:
+            _COOLDOWN[name] = time.monotonic() + COOLDOWN_SECONDS
+            first_error = first_error or exc
+            continue
+        except WeatherError as exc:
+            first_error = first_error or exc
+            continue
+        data["_source"] = name
+        _FORECAST.put(key, data)
+        return data
+    stale = _FORECAST.get(key, max_age=STALE_OK_SECONDS)           # every provider failed: an older forecast beats nothing, and we say so
+    if stale:
+        return {**stale, "_age_minutes": int((_FORECAST.age(key) or 0) / 60)}
+    raise first_error or WeatherError(BUSY)
 
 
 def _num(value: Any, suffix: str = "") -> str:
@@ -226,7 +422,7 @@ def format_weather(place: dict[str, Any], data: dict[str, Any], days: int = 3) -
     cur, daily = data["current"], data["daily"]
     line = (
         f"{label(place)}: now {_num(cur.get('temperature_2m'), '°C')} (feels {_num(cur.get('apparent_temperature'), '°C')}), "
-        f"{WMO.get(cur.get('weather_code'), 'unknown conditions')}, humidity {_num(cur.get('relative_humidity_2m'), '%')}, "
+        f"{cur.get('description') or WMO.get(cur.get('weather_code'), 'unknown conditions')}, humidity {_num(cur.get('relative_humidity_2m'), '%')}, "
         f"wind {_num(cur.get('wind_speed_10m'), ' km/h')}."
     )
     if data.get("_age_minutes") is not None:
@@ -240,7 +436,7 @@ def format_weather(place: dict[str, Any], data: dict[str, Any], days: int = 3) -
 
         lines.append(
             f"{day}: {_num(at('temperature_2m_min'))}–{_num(at('temperature_2m_max'), '°C')}, "
-            f"{WMO.get(at('weather_code'), 'unknown conditions')}, rain chance {_num(at('precipitation_probability_max'), '%')}"
+            f"{at('description') or WMO.get(at('weather_code'), 'unknown conditions')}, rain chance {_num(at('precipitation_probability_max'), '%')}"
         )
     return "\n".join(lines)
 

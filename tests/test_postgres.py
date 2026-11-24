@@ -408,3 +408,88 @@ async def test_expense_tables_have_row_level_security(pg):
     for table in ("ex_banks", "ex_payments", "ex_emis"):
         row = await pg.fetchone("SELECT relrowsecurity FROM pg_class WHERE relname = ?", (table,))
         assert row and row["relrowsecurity"] is True, table
+
+
+# ── Upgrading a database that already holds real data ───────────────────
+async def test_upgrading_an_existing_database_keeps_every_payment_exactly_as_it_was(pg, pg_dsn, settings):
+    """What happens on deploy: the tables are in last release's shape (no new columns or tables) and hold the user's data."""
+    from src.agent import expenses
+
+    with psycopg.connect(pg_dsn, autocommit=True) as conn:                               # recreate last release's shape
+        conn.execute("ALTER TABLE ex_payments DROP COLUMN kind, DROP COLUMN grp, DROP COLUMN settled_at, DROP COLUMN open_paid_minor")
+        conn.execute("ALTER TABLE ex_emis DROP COLUMN amount_custom")
+        conn.execute("ALTER TABLE notes DROP COLUMN space, DROP COLUMN kind, DROP COLUMN pinned")
+        conn.execute("ALTER TABLE tasks DROP COLUMN project, DROP COLUMN details, DROP COLUMN reminder_id")
+        conn.execute("DROP TABLE ex_spend, ex_subs")
+        pay_cols = {r[0] for r in conn.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'ex_payments'")}
+    assert "kind" not in pay_cols
+
+    async def payment(title, amounts, paid_count, due_day):
+        pid = await pg.execute(
+            "INSERT INTO ex_payments (title, category, notes, total_minor, bank_id, due_day, remind_days, created_at, updated_at) VALUES (?, 'loan', 'keep me', ?, NULL, ?, 1, 't', 't')",
+            (title, sum(amounts), due_day))
+        for i, a in enumerate(amounts):
+            await pg.execute("INSERT INTO ex_emis (payment_id, seq, amount_minor, due_date, paid_at, reminder_id) VALUES (?, ?, ?, ?, ?, ?)",
+                             (pid, i + 1, a, f"2027-{(i % 12) + 1:02d}-{due_day:02d}", "2026-11-24T16:00:00+00:00" if i < paid_count else None, None))
+        return pid
+
+    loan_a = await payment("Loan A", [120000] * 23 + [85000], 2, 4)                          # last emi set lower by hand
+    plan_b = await payment("Plan B", [60000] + [70000] * 10 + [69400], 1, 8)
+    even = await payment("Plan C", [50000] * 24, 5, 8)
+    await pg.execute("INSERT INTO notes (title, body, tags, created_at, updated_at) VALUES ('old note', 'body', 'a', 't', 't')")
+    await pg.execute("INSERT INTO tasks (title, due_at, priority, status, created_at) VALUES ('old task', NULL, 'normal', 'open', 't')")
+    snapshot_before = {
+        "emis": await pg.fetchall("SELECT id, payment_id, seq, amount_minor, due_date, paid_at FROM ex_emis ORDER BY id"),
+        "payments": await pg.fetchall("SELECT id, title, category, notes, total_minor, due_day, remind_days FROM ex_payments ORDER BY id"),
+    }
+
+    await pg.initialize()                                                                 # the deploy
+    await pg.initialize()                                                                 # a second boot must change nothing either
+
+    assert await pg.fetchall("SELECT id, payment_id, seq, amount_minor, due_date, paid_at FROM ex_emis ORDER BY id") == snapshot_before["emis"]
+    assert await pg.fetchall("SELECT id, title, category, notes, total_minor, due_day, remind_days FROM ex_payments ORDER BY id") == snapshot_before["payments"]
+    row = await pg.fetchone("SELECT kind, grp, settled_at, open_paid_minor FROM ex_payments WHERE id = ?", (loan_a,))
+    assert row == {"kind": "emi", "grp": "", "settled_at": None, "open_paid_minor": 0}    # old rows get the defaults that mean "as before"
+    assert (await pg.fetchone("SELECT space, kind, pinned FROM notes"))["space"] == "general"
+    assert (await pg.fetchone("SELECT project, details FROM tasks"))["project"] == ""
+    for table in ("ex_spend", "ex_subs"):
+        assert (await pg.fetchone("SELECT relrowsecurity FROM pg_class WHERE relname = ?", (table,)))["relrowsecurity"] is True
+
+    snap = await expenses.snapshot(pg, settings)                                           # first read: protect hand-set amounts
+    flagged = {p["title"]: [e["seq"] for e in p["emis"] if e["custom"]] for p in snap["payments"]}
+    assert flagged == {"Loan A": [24], "Plan B": [12], "Plan C": []}
+    assert await pg.fetchall("SELECT id, amount_minor FROM ex_emis ORDER BY id") == [{"id": r["id"], "amount_minor": r["amount_minor"]} for r in snapshot_before["emis"]]
+
+    spread = await expenses.rebalance(pg, settings, loan_a)                                  # the reported bug, on realistic shapes
+    assert [e["amount_minor"] for e in spread["emis"]][-1] == 85000 and sum(e["amount_minor"] for e in spread["emis"]) == spread["total_minor"]
+    assert {e["id"]: e["amount_minor"] for e in (await expenses.get_payment(pg, settings, even))["emis"]} == {r["id"]: r["amount_minor"] for r in snapshot_before["emis"] if r["payment_id"] == even}
+    assert plan_b
+
+
+async def test_spending_and_subscriptions_on_postgres(pg, settings):
+    from datetime import timedelta
+
+    from src.agent import spending
+
+    day = timeutil.now(settings).date()
+    await spending.add_spend(pg, settings, amount="100.50", category="food", spent_on=day.isoformat())
+    await spending.add_spend(pg, settings, amount="49.50", category="travel", spent_on=day.isoformat())
+    summary = await spending.month_summary(pg, settings)
+    assert summary["total_minor"] == 15000 and isinstance(summary["total_minor"], int)      # SUM(bigint) is a Decimal in Postgres: must be an int
+    assert [c["amount_minor"] for c in summary["categories"]] == [10050, 4950] and all(isinstance(c["amount_minor"], int) for c in summary["categories"])
+    assert isinstance(summary["previous_total_minor"], int) and summary["by_day"][0]["amount_minor"] == 15000
+    assert await spending.set_budget(pg, 500) == 50000 and (await spending.month_summary(pg, settings))["budget_left_minor"] == 35000
+
+    sub = await spending.create_sub(pg, settings, name="Netflix", amount=649, next_date=(day + timedelta(days=5)).isoformat())
+    renewed = await spending.renew_sub(pg, settings, sub["id"])
+    assert renewed["next_date"] > sub["next_date"]
+    assert (await pg.fetchone("SELECT COUNT(*) AS n FROM reminders WHERE session_id = 'expenses' AND status = 'pending'"))["n"] == 1
+    await spending.delete_sub(pg, sub["id"])
+    assert (await pg.fetchone("SELECT COUNT(*) AS n FROM reminders WHERE status = 'pending'"))["n"] == 0
+    assert "100.50" in await spending.export_spend_csv(pg)
+
+
+async def test_new_expense_tables_have_row_level_security(pg):
+    for table in ("ex_spend", "ex_subs"):
+        row = await pg.fetchone("SELECT relrowsecurity FROM pg_class WHERE relname = ?", (table,))
+        assert row and row["relrowsecurity"] is True, table
