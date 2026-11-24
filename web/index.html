@@ -3,68 +3,192 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TAPAN_AI // Neural Interface</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#050807">
+    <meta name="color-scheme" content="dark">
+    <title>TAPAN_AI</title>
+    <link rel="icon" href="icon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Tapan">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="application-name" content="Tapan">
+    <link rel="manifest" href="manifest.webmanifest">
     <link rel="stylesheet" href="style.css">
-    <link
-        href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700&family=Rajdhani:wght@300;400;600&display=swap"
-        rel="stylesheet">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&display=swap" rel="stylesheet">
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+    <script defer src="app.js"></script>
+    <script defer src="settings.js"></script>
+    <script defer src="settings-integrations.js"></script>
+    <script defer src="money.js"></script>
 </head>
 
 <body>
-    <div id="background-canvas"></div>
+    <a class="skip-link" href="#user-input">Skip to the message box</a>
+    <div id="sr-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+    <div class="bg" aria-hidden="true"></div>
 
-    <div class="main-container">
-        <!-- Header -->
-        <header class="glass-panel">
-            <h1 class="neon-text">TAPAN_AI <span class="version">v1</span></h1>
-            <div class="status-indicator">
-                <span class="status-dot"></span>
-                <span class="status-text">ONLINE</span>
-            </div>
-        </header>
-
-        <!-- 3D Avatar / Visualizer Area -->
-        <div class="avatar-container">
-            <div id="avatar-canvas"></div>
-            <div class="audio-visualizer">
-                <canvas id="waveform"></canvas>
-            </div>
-        </div>
-
-        <!-- Chat Interface -->
-        <div class="chat-container glass-panel">
-            <div id="chat-history" class="scroller">
-                <div class="message assistant">
-                    <div class="bubble">System initializing... neural interface active. How may I assist you?</div>
+    <div class="app" id="app" data-conn="connecting" data-panel="closed">
+        <!-- ── Top bar ─────────────────────────────────────────── -->
+        <header class="topbar">
+            <div class="brand">
+                <div class="orb" id="orb" aria-hidden="true"><span id="avatar-canvas"></span></div>
+                <div class="brand-text">
+                    <h1>TAPAN<span class="accent">_AI</span></h1>
+                    <span id="conn-pill" class="pill" data-state="connecting" role="status">
+                        <span class="status-dot"></span><span class="status-text">Connecting</span>
+                    </span>
                 </div>
             </div>
 
-            <div class="input-area">
-                <button id="voice-toggle" class="icon-btn" title="Toggle Voice">
-                    <svg viewBox="0 0 24 24" width="24" height="24">
-                        <path fill="currentColor"
-                            d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
-                        <path fill="currentColor"
-                            d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
-                    </svg>
+            <nav class="actions" aria-label="Actions">
+                <button id="install-btn" class="btn hidden" type="button" aria-label="Install Tapan as an app">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z" /></svg>
+                    <span class="lbl">Install</span>
                 </button>
-                <input type="text" id="user-input" placeholder="Type a command or speak..." autocomplete="off">
-                <button id="send-btn" class="icon-btn">
-                    <svg viewBox="0 0 24 24" width="24" height="24">
-                        <path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
-                    </svg>
+                <button id="stop-speech-btn" class="btn hidden" type="button" aria-label="Stop speaking">
+                    <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" /></svg>
+                    <span class="lbl">Stop</span>
                 </button>
-            </div>
+                <button id="voice-mode-btn" class="btn" type="button" data-mode="voice" aria-label="Spoken replies: only after I use the microphone">
+                    <svg class="i-off" viewBox="0 0 24 24"><path fill="currentColor" d="M3 9v6h4l5 4V5L7 9H3zm13.6 3 2.4-2.4-1.4-1.4-2.4 2.4-2.4-2.4-1.4 1.4 2.4 2.4-2.4 2.4 1.4 1.4 2.4-2.4 2.4 2.4 1.4-1.4z" /></svg>
+                    <svg class="i-voice" viewBox="0 0 24 24"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11h-2z" /></svg>
+                    <svg class="i-always" viewBox="0 0 24 24"><path fill="currentColor" d="M3 9v6h4l5 4V5L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4zM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6z" /></svg>
+                    <span class="lbl" id="voice-mode-label">Voice</span>
+                </button>
+                <button id="new-chat-btn" class="btn" type="button" aria-label="Start a new conversation">
+                    <svg viewBox="0 0 24 24"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" /></svg>
+                    <span class="lbl">New</span>
+                </button>
+                <button id="history-btn" class="btn panel-toggle" type="button" data-tab="history" aria-label="Conversation history" aria-expanded="false">
+                    <svg viewBox="0 0 24 24"><path fill="currentColor" d="M13 3a9 9 0 0 0-9 9H1l3.9 3.9.1.1L9 12H6a7 7 0 1 1 2.1 5l-1.4 1.4A9 9 0 1 0 13 3zm-1 5v5l4.3 2.5.8-1.3-3.6-2.1V8H12z" /></svg>
+                    <span class="lbl">History</span>
+                </button>
+                <button id="today-btn" class="btn panel-toggle" type="button" data-tab="today" aria-label="Today: reminders and tasks" aria-expanded="false">
+                    <svg viewBox="0 0 24 24"><path fill="currentColor" d="M19 4h-1V2h-2v2H8V2H6v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 16H5V10h14v10zM7 12h5v5H7z" /></svg>
+                    <span class="lbl">Today</span>
+                </button>
+            </nav>
+        </header>
+
+        <div id="update-banner" class="update-banner hidden" role="status">
+            <span>A new version of Tapan is available.</span>
+            <button id="update-reload" type="button">Reload</button>
+        </div>
+
+        <section id="install-banner" class="install-banner hidden" aria-label="Install the app">
+            <img src="icons/icon-192.png" alt="" width="40" height="40">
+            <div class="install-text"><b>Install Tapan</b><span>Full-screen app, opens from your home screen, loads instantly.</span></div>
+            <button id="install-yes" class="install-go" type="button">Install</button>
+            <button id="install-no" class="install-dismiss" type="button" aria-label="Not now, hide this">Not now</button>
+        </section>
+
+        <div class="layout">
+            <!-- ── Conversation ────────────────────────────────── -->
+            <main class="chat" aria-label="Conversation">
+                <div class="messages-wrap">
+                    <div id="chat-history" class="messages" role="log" aria-live="polite" aria-relevant="additions" tabindex="0"></div>
+
+                    <section id="empty-state" class="empty">
+                        <div class="empty-orb" aria-hidden="true"></div>
+                        <h2 id="greeting">Hello</h2>
+                        <p>What can I take care of? Tip: paste a whole list and I'll handle every item at once.</p>
+                        <div class="starters">
+                            <button type="button" class="starter" data-send="Give me a briefing on my day">
+                                <span class="emoji">☀️</span><b>Brief me</b><small>Reminders, tasks, weather</small>
+                            </button>
+                            <button type="button" class="starter" data-fill="Set these reminders:&#10;1. &#10;2. &#10;3. ">
+                                <span class="emoji">⏰</span><b>Several reminders</b><small>Paste a list, I schedule all</small>
+                            </button>
+                            <button type="button" class="starter" data-fill="Add these tasks:&#10;- &#10;- &#10;- ">
+                                <span class="emoji">✅</span><b>Add tasks</b><small>One per line</small>
+                            </button>
+                            <button type="button" class="starter" data-send="What's the weather like today?">
+                                <span class="emoji">🌦️</span><b>Weather</b><small>Today and next days</small>
+                            </button>
+                            <button type="button" class="starter" data-fill="Search the web for ">
+                                <span class="emoji">🔎</span><b>Search the web</b><small>Current info</small>
+                            </button>
+                            <button type="button" class="starter" data-fill="What did we talk about regarding ">
+                                <span class="emoji">🧠</span><b>Recall a chat</b><small>Search past conversations</small>
+                            </button>
+                        </div>
+                    </section>
+
+                    <button id="jump-btn" class="jump hidden" type="button" aria-label="Jump to latest message">
+                        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="m12 16-6-6h12z" /></svg>
+                        <span id="jump-label">New messages</span>
+                    </button>
+                </div>
+
+                <form id="composer" class="composer" autocomplete="off">
+                    <div class="composer-row">
+                        <button id="voice-toggle" type="button" class="icon-btn" aria-label="Speak a message" aria-pressed="false" title="Speak a message">
+                            <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11h-2z" /></svg>
+                        </button>
+                        <textarea id="user-input" rows="1" placeholder="Message Tapan…" aria-label="Message" aria-describedby="composer-hint" enterkeyhint="send" autocomplete="off" autocapitalize="sentences"></textarea>
+                        <button id="send-btn" class="icon-btn send" type="submit" aria-label="Send message" disabled>
+                            <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z" /></svg>
+                        </button>
+                    </div>
+                    <p class="hint" id="composer-hint"><kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line</p>
+                </form>
+            </main>
+
+            <!-- ── Side panel: Today + History ─────────────────── -->
+            <section id="side-panel" class="side" aria-label="Today, history, money and settings" role="complementary">
+                <div class="side-head">
+                    <div class="tabs" role="tablist">
+                        <button type="button" role="tab" id="tab-today" data-tab="today" aria-selected="true">Today</button>
+                        <button type="button" role="tab" id="tab-history" data-tab="history" aria-selected="false">History</button>
+                        <button type="button" role="tab" id="tab-money" data-tab="money" aria-selected="false">Money</button>
+                        <button type="button" role="tab" id="tab-settings" data-tab="settings" aria-selected="false">Settings</button>
+                    </div>
+                    <div class="side-actions">
+                        <button id="lock-btn" class="link-btn hidden" type="button" aria-label="Lock: forget the access token on this device">Lock</button>
+                        <button id="side-close" class="icon-btn small" type="button" aria-label="Close panel">
+                        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4l5.6 5.6L5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6z" /></svg>
+                    </button>
+                    </div>
+                </div>
+                <div id="panel-today" class="panel" role="tabpanel" aria-labelledby="tab-today"></div>
+                <div id="panel-history" class="panel hidden" role="tabpanel" aria-labelledby="tab-history"></div>
+                <div id="panel-money" class="panel hidden" role="tabpanel" aria-labelledby="tab-money"></div>
+                <div id="panel-settings" class="panel hidden" role="tabpanel" aria-labelledby="tab-settings"></div>
+            </section>
+        </div>
+
+        <div id="scrim" class="scrim" hidden></div>
+    </div>
+
+    <!-- Install help for browsers without a native install prompt (iOS Safari, Samsung/Firefox, etc.) -->
+    <div id="install-sheet" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="install-title">
+        <div class="sheet-card">
+            <h2 id="install-title">Install Tapan</h2>
+            <ol id="install-steps"></ol>
+            <button id="install-close" class="auth-submit" type="button">Got it</button>
         </div>
     </div>
 
-    <!-- Hidden audio element for speech synthesis feedback if needed -->
-    <audio id="audio-feedback" style="display:none"></audio>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-    <script src="app.js"></script>
+    <!-- Access-token gate: shown whenever the server answers 401 / WebSocket close 4401 -->
+    <div id="auth-overlay" class="auth-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+        <form id="auth-form" class="auth-card" autocomplete="on">
+            <h2 id="auth-title">Access required</h2>
+            <p id="auth-msg" role="alert">This assistant is private. Enter your access token to unlock it.</p>
+            <input id="auth-input" type="password" name="password" autocomplete="current-password"
+                placeholder="Access token" aria-label="Access token" required>
+            <button id="auth-submit" type="submit">Unlock</button>
+            <small>This is the <b>TAPAN_API_TOKEN</b> value from Render (service → Environment). It is
+                <b>not</b> your OpenRouter key. Stored only in this browser.</small>
+        </form>
+    </div>
 </body>
 
 </html>

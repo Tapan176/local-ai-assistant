@@ -1,0 +1,39 @@
+{
+  "id": "/web/",
+  "name": "TAPAN_AI — personal assistant",
+  "short_name": "Tapan",
+  "description": "Your personal AI assistant: reminders, tasks, notes, web search and memory of every conversation.",
+  "lang": "en",
+  "dir": "ltr",
+  "start_url": "/web/index.html?source=pwa",
+  "scope": "/web/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#050807",
+  "theme_color": "#050807",
+  "categories": ["productivity", "utilities"],
+  "prefer_related_applications": false,
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ],
+  "shortcuts": [
+    {
+      "name": "New chat",
+      "short_name": "New chat",
+      "description": "Start a fresh conversation",
+      "url": "/web/index.html?new=1&source=shortcut",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Today",
+      "short_name": "Today",
+      "description": "Reminders and tasks for today",
+      "url": "/web/index.html?panel=today&source=shortcut",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ]
+}

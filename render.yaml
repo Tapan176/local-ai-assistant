@@ -1,0 +1,43 @@
+# Render Blueprint for TAPAN_AI (Jarvis mode) — free web service + Supabase Postgres for all data.
+#
+# Why this shape: Render hosts the always-listening server; Supabase hosts the database (the Render free plan
+# has no persistent disk, so the database must live elsewhere). Memories, notes, tasks, reminders and chat history
+# therefore survive restarts and redeploys.
+#
+# Free-plan behaviour to know about: the service sleeps after ~15 min without traffic and takes a while to wake.
+# Reminders that came due while it slept are fired as soon as it wakes (the scheduler catches up). For reminders
+# that fire on time, upgrade `plan` to `starter` (always on) — nothing else needs to change.
+#
+# Deploy: Render Dashboard -> New -> Blueprint -> this repo/branch. You will be asked for the values marked
+# `sync: false` (paste them there; they are never stored in git).
+services:
+  - type: web
+    name: tapan-ai
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: singapore        # closest Render region to the Mumbai Supabase project
+    branch: develop          # switch to `main` once develop is merged
+    healthCheckPath: /health
+    autoDeploy: false        # deploy deliberately, not on every push
+    envVars:
+      - key: TAPAN_ENV
+        value: prod
+      - key: TAPAN_API_TOKEN          # your assistant's password. Generated once; copy it from the dashboard.
+        generateValue: true
+      - key: TAPAN_DATABASE_URL       # Supabase -> Connect -> "Session pooler" URI (the IPv4-compatible one)
+        sync: false
+      - key: TAPAN_LLM_PROVIDER
+        value: openrouter
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: TAPAN_OPENROUTER_MODEL
+        value: anthropic/claude-haiku-5.5
+      - key: TAPAN_OPENROUTER_FALLBACK_MODEL
+        value: deepseek/deepseek-v4.1-flash
+      - key: TAPAN_TIMEZONE           # reminders and "tomorrow" depend on this
+        value: Asia/Kolkata
+      - key: TAPAN_USER_NAME
+        sync: false
+      - key: TAPAN_HOME_LOCATION      # default city for weather / daily briefing
+        sync: false

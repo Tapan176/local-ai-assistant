@@ -6,7 +6,10 @@ import logging
 import re
 from typing import Any
 
-from supermemory import Supermemory
+try:  # Supermemory is an optional cloud add-on; the assistant works fully offline without it.
+    from supermemory import Supermemory
+except ImportError:  # pragma: no cover - depends on the install
+    Supermemory = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +22,10 @@ class SupermemoryStore:
 
     def __init__(self, api_key: str) -> None:
         self.api_key = api_key
-        self._client: Supermemory | None = None
-        if self.api_key:
+        self._client: Any = None
+        if self.api_key and Supermemory is None:
+            logger.warning("TAPAN_SUPERMEMORY_API_KEY is set but the 'supermemory' package is not installed.")
+        elif self.api_key:
             try:
                 self._client = Supermemory(api_key=self.api_key)
                 logger.info("Supermemory client initialized successfully.")

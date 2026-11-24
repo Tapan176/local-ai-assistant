@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from src.models import MemoryContext, ReasoningOutput
-from src.storage.graph_store import GraphStore
+from src.storage.supermemory_store import SupermemoryStore
 from src.storage.sqlite_store import SQLiteStore
 from src.tools.finance_tool import FinanceTool
 from src.tools.people_tool import PeopleTool
@@ -21,8 +21,7 @@ def anyio_backend() -> str:
 async def test_people_and_finance_quick() -> None:
     store = SQLiteStore(":memory:")
     await store.initialize()
-    graph = GraphStore(store)
-    people_tool = PeopleTool(store, graph)
+    people_tool = PeopleTool(store, SupermemoryStore(""))
     finance_tool = FinanceTool(store)
 
     people_reasoning = ReasoningOutput(

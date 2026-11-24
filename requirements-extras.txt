@@ -1,0 +1,23 @@
+# Optional extras for a local, full-fat install:  pip install -r requirements.txt -r requirements-extras.txt
+# None of these are needed in the agent (Jarvis) mode or on Render.
+
+# Semantic intent routing / NER / sentiment for the legacy offline pipeline (large: pulls in torch)
+sentence-transformers>=3.0.0
+spacy>=3.7.0
+vaderSentiment>=3.3.2
+chromadb>=0.5.0
+
+# Local voice interface (src/interfaces/voice_interface.py)
+speechrecognition>=3.10.0
+pyttsx3>=2.90
+
+# Cloud memory sync (optional; local SQLite memory works without it)
+supermemory>=3.0.0
+
+# Richer system_info skill (CPU / RAM / battery)
+psutil>=5.9.0
+
+# Dev (pgserver = embedded Postgres used by tests/test_postgres.py)
+pgserver>=0.1.4
+pytest>=8.0.0
+pytest-asyncio>=0.23.0

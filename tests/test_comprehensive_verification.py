@@ -339,13 +339,14 @@ async def test_memory_system(results: TestResults):
     
     store = SQLiteStore(":memory:")
     await store.initialize()
-    vector_store = create_vector_store(Settings.from_env())
-    graph_store = CogneeStore(store)
-    
-    episodic = EpisodicMemory(store)
-    semantic = SemanticMemory(store, vector_store)
-    persona = PersonaMemory(store)
-    retriever = MemoryRetriever(episodic, semantic, persona, graph_store)
+    from src.storage.supermemory_store import SupermemoryStore
+
+    supermemory = SupermemoryStore("")  # no API key => cloud calls are no-ops; SQLite is the source of truth
+
+    episodic = EpisodicMemory(store, supermemory)
+    semantic = SemanticMemory(store, supermemory)
+    persona = PersonaMemory(store, supermemory)
+    retriever = MemoryRetriever(episodic, semantic, persona, supermemory)
     
     # Test Episodic Memory
     try:

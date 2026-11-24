@@ -13,6 +13,7 @@ from src.config.settings import Settings
 from .semantic_intent_classifier import SemanticIntentClassifier, SemanticIntentMatch
 from src.utils.constants import AFFIRMATION_WORDS, BANK_KEYWORDS, is_affirmation
 from .bitnet_backend import BitNetBackend, create_bitnet_backend
+from .chat_client import ChatClient
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,8 @@ class LLMDispatcher:
                 model_name=settings.semantic_intent_model,
                 threshold=settings.semantic_intent_threshold,
             )
+        # Unified OpenAI-compatible client (OmniRoute -> OpenRouter -> Ollama) shared with the agent.
+        self.chat_client = ChatClient(settings)
         # Initialize BitNet backend if enabled
         self._bitnet_backend: BitNetBackend | None = None
         if settings.bitnet_enabled:
@@ -126,21 +129,23 @@ class LLMDispatcher:
         temperature: float = 0.5,
         json_mode: bool = False,
     ) -> str:
-        """Try OpenRouter → Ollama → BitNet → heuristic fallback."""
+        """Try OmniRoute → OpenRouter → Ollama → BitNet → heuristic fallback."""
         provider = self.settings.llm_provider.lower()
         if provider == "mock":
             return self._heuristic_generation(system, context, user, temperature, json_mode)
 
-        # 1. OpenRouter (primary cloud LLM)
-        if self.settings.openrouter_api_key:
-            for model in [self.settings.openrouter_model, self.settings.openrouter_fallback_model]:
-                text = await self._openrouter_chat(model, system, context, user, temperature, json_mode)
-                if text:
-                    return text
+        # 1. Unified chain: OmniRoute -> OpenRouter -> Ollama (primary model)
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "system", "content": context},
+            {"role": "user", "content": user},
+        ]
+        reply = await self.chat_client.complete(messages, temperature=temperature, json_mode=json_mode)
+        if reply and reply.content:
+            return reply.content
 
-        # 2. Ollama fallback (local models)
-        models = [self.settings.ollama_model] + list(self.settings.ollama_fallback_models)
-        for model in models:
+        # 2. Ollama fallback models (local)
+        for model in list(self.settings.ollama_fallback_models):
             text = await self._ollama_chat(model, system, context, user, temperature, json_mode)
             if text:
                 return text

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -60,8 +61,45 @@ CREATE TABLE IF NOT EXISTS reminders (
     title TEXT NOT NULL,
     due_at TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    recurrence TEXT
 );
+
+CREATE TABLE IF NOT EXISTS ex_banks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    balance_minor INTEGER NOT NULL DEFAULT 0,
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ex_payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'other',
+    notes TEXT NOT NULL DEFAULT '',
+    total_minor INTEGER NOT NULL,
+    bank_id INTEGER,
+    due_day INTEGER NOT NULL,
+    remind_days INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ex_emis (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    payment_id INTEGER NOT NULL,
+    seq INTEGER NOT NULL,
+    amount_minor INTEGER NOT NULL,
+    due_date TEXT NOT NULL,
+    paid_at TEXT,
+    deducted_bank_id INTEGER,
+    deducted_minor INTEGER,
+    reminder_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_ex_emis_payment ON ex_emis(payment_id, seq);
+CREATE INDEX IF NOT EXISTS idx_ex_emis_due ON ex_emis(due_date);
 
 CREATE TABLE IF NOT EXISTS people (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,6 +135,62 @@ CREATE TABLE IF NOT EXISTS semantic_documents (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL DEFAULT '',
+    body TEXT NOT NULL,
+    tags TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    due_at TEXT,
+    priority TEXT NOT NULL DEFAULT 'normal',
+    status TEXT NOT NULL DEFAULT 'open',
+    created_at TEXT NOT NULL,
+    completed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS memories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    content TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'general',
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+-- key/value settings the app manages itself (e.g. the generated Web Push key). The key column is called `id`
+-- (like semantic_documents) so the Postgres translation layer's `RETURNING id` works on every table.
+CREATE TABLE IF NOT EXISTS app_settings (
+    id TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    endpoint TEXT UNIQUE NOT NULL,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    user_agent TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    last_success_at TEXT,
+    last_error TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_episodes_session ON episodes(session_id, id);
+CREATE INDEX IF NOT EXISTS idx_reminders_status_due ON reminders(status, due_at);
+
 CREATE TABLE IF NOT EXISTS state_checkpoints (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
@@ -108,6 +202,10 @@ CREATE TABLE IF NOT EXISTS state_checkpoints (
 """
 
 
+# (table, column, column definition) added after the first release; applied to databases created before them.
+MIGRATIONS = (("reminders", "recurrence", "TEXT"),)
+
+
 class SQLiteStore:
     """Async-friendly SQLite repository helper."""
 
@@ -116,6 +214,9 @@ class SQLiteStore:
         if db_path != ":memory:":
             Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn: sqlite3.Connection | None = None
+        # One shared connection is used from worker threads (asyncio.to_thread); sqlite3 connections are not
+        # safe for concurrent use, so every operation takes this lock.
+        self._lock = threading.RLock()
 
     def _connect(self) -> sqlite3.Connection:
         if self._conn is not None:
@@ -129,26 +230,32 @@ class SQLiteStore:
         await asyncio.to_thread(self._initialize_sync)
 
     def _initialize_sync(self) -> None:
-        with self._connect() as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.executescript(SCHEMA_SQL)
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO persona_profile
-                (id, communication_style, emotional_baseline, preferences_json, goals_json, updated_at)
-                VALUES (1, 'balanced', 'neutral', '{}', '{}', datetime('now'))
-                """
-            )
-            conn.commit()
+        with self._lock:
+            with self._connect() as conn:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.executescript(SCHEMA_SQL)
+                # CREATE TABLE IF NOT EXISTS never adds columns to a table that already exists: migrate explicitly.
+                for table, column, ddl in MIGRATIONS:
+                    if column not in {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}:
+                        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO persona_profile
+                    (id, communication_style, emotional_baseline, preferences_json, goals_json, updated_at)
+                    VALUES (1, 'balanced', 'neutral', '{}', '{}', datetime('now'))
+                    """
+                )
+                conn.commit()
 
     async def execute(self, sql: str, params: tuple[Any, ...] = ()) -> int:
         return await asyncio.to_thread(self._execute_sync, sql, params)
 
     def _execute_sync(self, sql: str, params: tuple[Any, ...]) -> int:
-        with self._connect() as conn:
-            cur = conn.execute(sql, params)
-            conn.commit()
-            return int(cur.lastrowid or 0)
+        with self._lock:
+            with self._connect() as conn:
+                cur = conn.execute(sql, params)
+                conn.commit()
+                return int(cur.lastrowid or 0)
 
     async def execute_transaction(self, operations: list[tuple[str, tuple[Any, ...]]]) -> list[int]:
         """Execute multiple SQL operations in a single transaction."""
@@ -156,33 +263,36 @@ class SQLiteStore:
 
     def _execute_transaction_sync(self, operations: list[tuple[str, tuple[Any, ...]]]) -> list[int]:
         """Execute transaction synchronously."""
-        with self._connect() as conn:
-            results = []
-            try:
-                for sql, params in operations:
-                    cur = conn.execute(sql, params)
-                    results.append(int(cur.lastrowid or 0))
-                conn.commit()
-                return results
-            except Exception:
-                conn.rollback()
-                raise
+        with self._lock:
+            with self._connect() as conn:
+                results = []
+                try:
+                    for sql, params in operations:
+                        cur = conn.execute(sql, params)
+                        results.append(int(cur.lastrowid or 0))
+                    conn.commit()
+                    return results
+                except Exception:
+                    conn.rollback()
+                    raise
 
     async def fetchone(self, sql: str, params: tuple[Any, ...] = ()) -> dict[str, Any] | None:
         return await asyncio.to_thread(self._fetchone_sync, sql, params)
 
     def _fetchone_sync(self, sql: str, params: tuple[Any, ...]) -> dict[str, Any] | None:
-        with self._connect() as conn:
-            row = conn.execute(sql, params).fetchone()
-            return dict(row) if row else None
+        with self._lock:
+            with self._connect() as conn:
+                row = conn.execute(sql, params).fetchone()
+                return dict(row) if row else None
 
     async def fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
         return await asyncio.to_thread(self._fetchall_sync, sql, params)
 
     def _fetchall_sync(self, sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
-        with self._connect() as conn:
-            rows = conn.execute(sql, params).fetchall()
-            return [dict(row) for row in rows]
+        with self._lock:
+            with self._connect() as conn:
+                rows = conn.execute(sql, params).fetchall()
+                return [dict(row) for row in rows]
 
     @staticmethod
     def parse_json_field(value: str | None) -> dict[str, Any]:
