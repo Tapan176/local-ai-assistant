@@ -77,6 +77,7 @@
     function change(path, method, body, doneText, queue) {
         if (pending > 0 && !queue) return Promise.resolve(false);
         pending += 1; S.busy = true; root.setAttribute('aria-busy', 'true');
+        const busy = host().busyStart(method === 'DELETE' ? 'Deleting…' : 'Saving…');   // covers the save AND the reload that follows it
         const run = chain.then(async () => {
             try {
                 await host().api(path, jsonOpts(method, body));
@@ -95,6 +96,7 @@
                 try { await fetchAll(); } catch (err) { S.error = await errorText(err); }
                 S.busy = false; root.removeAttribute('aria-busy');
             }
+            host().busyEnd(busy);
             return ok;
         });
     }
@@ -199,6 +201,20 @@
     const CATEGORY_LABEL = { loan: 'Loan', card: 'Credit card', rent: 'Rent', insurance: 'Insurance', subscription: 'Subscription', purchase: 'Purchase on EMI', tax: 'Tax', personal: 'Personal / owed to someone', other: 'Other' };
     const KIND_LABEL = { emi: 'Paid in EMIs', due: 'One payment with a due date (e.g. a minimum due)', open: 'No due date (I pay when I can)' };
     const kindOf = (p) => p.kind || 'emi';
+    const LONG_LIST = 6;                                     // more EMIs than this scroll inside their card
+    function positionList(box) {                             // start a long list at the next EMI to pay, not at EMI 1
+        if (!box || box.offsetParent === null) return;       // not on screen (closed card): nothing to measure yet
+        const next = box.querySelector('.mn-emi:not(.paid)');
+        // measured from real positions at this moment, so fonts, padding and neighbours cannot throw it off
+        box.scrollTop = next ? Math.max(0, next.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop - 4) : 0;
+    }
+    function scrollBox(ul, key, label) {                     // the <ul> stays a real list; the box around it is the focusable, named scroll region
+        const box = h('div', 'scroll-box');
+        box.dataset.scrollKey = key; box.tabIndex = 0;
+        box.setAttribute('role', 'region'); box.setAttribute('aria-label', label);
+        box.appendChild(ul);
+        return box;
+    }
 
     // ── overview ─────────────────────────────────────────────────
     function stat(label, value, sub, tone) {
@@ -468,8 +484,14 @@
         const bankName = (S.data.banks.find((b) => b.id === p.bank_id) || {}).name;
         const det = h('details', `mn-pay${p.finished ? ' done' : ''}${p.included === false ? ' muted-out' : ''}`);
         det.dataset.id = p.id;
-        det.open = S.open.has(p.id);
-        det.addEventListener('toggle', () => { if (det.open) S.open.add(p.id); else S.open.delete(p.id); });
+        const reopened = S.open.has(p.id);
+        if (reopened) det.dataset.auto = '1';                // opened by a repaint, not by the user: its list keeps the position it had
+        det.open = reopened;
+        det.addEventListener('toggle', () => {
+            if (!det.open) { S.open.delete(p.id); return; }
+            S.open.add(p.id);
+            if (det.dataset.auto) delete det.dataset.auto; else positionList(det.querySelector('.scroll-box'));
+        });
         const sum = h('summary', 'mn-pay-sum');
         sum.dataset.fk = `pay:${p.id}`;
         const head = h('span', 'mn-pay-head');
@@ -506,7 +528,10 @@
         } else {
             const ul = h('ul', 'mn-emis');
             p.emis.forEach((e) => ul.appendChild(emiRow(p, e)));
-            body.appendChild(ul);
+            if (p.emis.length > LONG_LIST) {            // a 24-EMI loan must not push Edit, Delete and the rest a mile down the page
+                body.appendChild(h('p', 'mn-hint', `${p.emi_count} EMIs. Scroll inside the list; it opens at the next one to pay.`));
+                body.appendChild(scrollBox(ul, `pay:${p.id}`, `EMIs of ${p.title}`));
+            } else body.appendChild(ul);
         }
         const actions = h('div', 'set-actions');
         if (kind === 'open') {
@@ -560,7 +585,7 @@
             li.appendChild(label);
             ul.appendChild(li);
         });
-        box.appendChild(ul);
+        box.appendChild(unpaid.length > LONG_LIST ? scrollBox(ul, `bulk:${p.id}`, `Unpaid EMIs of ${p.title}`) : ul);
         const total = unpaid.filter((e) => pick.has(e.id)).reduce((sum, e) => sum + e.amount_minor, 0);
         const row = h('div', 'set-actions');
         const go2 = btn(pick.size ? `Mark ${pick.size} paid · ${money(total)}` : 'Tick the EMIs to mark', () => {
@@ -749,6 +774,8 @@
         const active = document.activeElement;
         const fk = S.focusNext || (active && root.contains(active) ? active.dataset.fk : null);
         const scroll = root.scrollTop;
+        const listScroll = {};
+        root.querySelectorAll('.scroll-box').forEach((box) => { listScroll[box.dataset.scrollKey] = box.scrollTop; });
         S.focusNext = null;
 
         const nav = h('div', 'mn-nav');
@@ -770,6 +797,10 @@
         }
         root.replaceChildren(...children);
         root.scrollTop = scroll;
+        root.querySelectorAll('.scroll-box').forEach((box) => {
+            const key = box.dataset.scrollKey;
+            if (key in listScroll) box.scrollTop = listScroll[key]; else positionList(box);
+        });
         if (fk) {
             const target = Array.from(root.querySelectorAll('[data-fk]')).find((n) => n.dataset.fk === fk);
             if (target && !target.disabled) target.focus({ preventScroll: false });

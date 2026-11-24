@@ -228,15 +228,18 @@ async def ensure_custom_backfill(store: Any) -> None:
 async def _load(store: Any, settings: Settings, only_payment: int | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     await ensure_custom_backfill(store)
     where, params = ("WHERE id = ?", (only_payment,)) if only_payment is not None else ("", ())
-    pays = await store.fetchall(f"SELECT * FROM ex_payments {where} ORDER BY id", params)
     ewhere, eparams = ("WHERE payment_id = ?", (only_payment,)) if only_payment is not None else ("", ())
-    emis = await store.fetchall(f"SELECT * FROM ex_emis {ewhere} ORDER BY payment_id, seq", eparams)
+    # independent reads run side by side: against a remote database that is one network round trip, not three
+    pays, emis, banks = await asyncio.gather(
+        store.fetchall(f"SELECT * FROM ex_payments {where} ORDER BY id", params),
+        store.fetchall(f"SELECT * FROM ex_emis {ewhere} ORDER BY payment_id, seq", eparams),
+        store.fetchall("SELECT id, name, balance_minor, note FROM ex_banks ORDER BY LOWER(name), id"),
+    )
     today = _today(settings)
     by_payment: dict[int, list[dict[str, Any]]] = {}
     for e in emis:
         by_payment.setdefault(e["payment_id"], []).append(e)
     shaped = [_shape_payment(p, by_payment.get(p["id"], []), today) for p in pays]
-    banks = await store.fetchall("SELECT id, name, balance_minor, note FROM ex_banks ORDER BY LOWER(name), id")
     return shaped, banks
 
 
@@ -460,10 +463,34 @@ def _when_phrase(days: int) -> str:
     return "today" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
 
 
-async def sync_reminders(store: Any, settings: Settings, payment_id: int) -> None:
-    """Make the reminders match the schedule. Reminders that are already right are left alone."""
-    pay = await store.fetchone("SELECT * FROM ex_payments WHERE id = ?", (payment_id,))
-    emis = await store.fetchall("SELECT * FROM ex_emis WHERE payment_id = ? ORDER BY seq", (payment_id,))
+def reminder_ops(table: str, row_id: int, current: dict[str, Any] | None, want: tuple[str, str] | None, session_id: str, had_link: bool,
+                  link: str = "reminder_id") -> list[tuple[str, tuple[Any, ...]]]:
+    """The statements that make one row's reminder match ``want`` (due_at, title). Empty when it already does.
+
+    A new reminder is linked to its row by looking it up in the same transaction (a data-modifying statement cannot hand its new id to
+    the next one without another round trip), so any number of rows can be fixed in a single exchange with the database."""
+    if current and want and current["status"] == "pending" and current["due_at"] == want[0] and current["title"] == want[1]:
+        return []
+    ops: list[tuple[str, tuple[Any, ...]]] = []
+    if current and current["status"] == "pending":
+        ops.append(("UPDATE reminders SET status = 'cancelled' WHERE id = ? AND status = 'pending'", (current["id"],)))
+    if want:
+        ops.append(("INSERT INTO reminders (session_id, title, due_at, status, created_at) VALUES (?, ?, ?, 'pending', ?)", (session_id, want[1], want[0], _now_iso())))
+        ops.append((f"UPDATE {table} SET {link} = (SELECT id FROM reminders WHERE session_id = ? AND due_at = ? AND title = ? AND status = 'pending' ORDER BY id DESC LIMIT 1) WHERE id = ?",
+                    (session_id, want[0], want[1], row_id)))
+    elif had_link:
+        ops.append((f"UPDATE {table} SET {link} = NULL WHERE id = ?", (row_id,)))
+    return ops
+
+
+async def sync_reminders(store: Any, settings: Settings, payment_id: int) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """Make the reminders match the schedule. Reminders that are already right are left alone.
+    Returns the payment and EMI rows it read (reminder links are the only thing it changes), so callers need not read them again."""
+    pay, emis, reminders = await asyncio.gather(
+        store.fetchone("SELECT * FROM ex_payments WHERE id = ?", (payment_id,)),
+        store.fetchall("SELECT * FROM ex_emis WHERE payment_id = ? ORDER BY seq", (payment_id,)),
+        store.fetchall("SELECT id, title, due_at, status FROM reminders WHERE id IN (SELECT reminder_id FROM ex_emis WHERE payment_id = ? AND reminder_id IS NOT NULL)", (payment_id,)),
+    )
     now = timeutil.now(settings)
     tz = timeutil.get_tz(settings)
     total = len(emis)
@@ -480,32 +507,33 @@ async def sync_reminders(store: Any, settings: Settings, payment_id: int) -> Non
                     title = f"EMI {e['seq']}/{total} · {pay['title']} · {money(e['amount_minor'], settings.currency)} due {_when_phrase(int(pay['remind_days']))}"
                 wanted[e["id"]] = (fire.isoformat(), title[:200])
 
-    existing_ids = [e["reminder_id"] for e in emis if e["reminder_id"]]
-    existing: dict[int, dict[str, Any]] = {}
-    if existing_ids:
-        marks = ",".join("?" for _ in existing_ids)
-        existing = {r["id"]: r for r in await store.fetchall(f"SELECT id, title, due_at, status FROM reminders WHERE id IN ({marks})", tuple(existing_ids))}
+    existing = {r["id"]: r for r in reminders}
 
+    ops: list[tuple[str, tuple[Any, ...]]] = []
     for e in emis:
         current = existing.get(e["reminder_id"]) if e["reminder_id"] else None
-        want = wanted.get(e["id"])
-        if current and want and current["status"] == "pending" and current["due_at"] == want[0] and current["title"] == want[1]:
-            continue
-        if current and current["status"] == "pending":
-            await store.execute("UPDATE reminders SET status = 'cancelled' WHERE id = ? AND status = 'pending'", (current["id"],))
-        new_id = None
-        if want:
-            new_id = await store.execute(
-                "INSERT INTO reminders (session_id, title, due_at, status, created_at) VALUES ('expenses', ?, ?, 'pending', ?)",
-                (want[1], want[0], _now_iso()),
-            )
-        if new_id != e["reminder_id"]:
-            await store.execute("UPDATE ex_emis SET reminder_id = ? WHERE id = ?", (new_id, e["id"]))
+        ops.extend(reminder_ops("ex_emis", e["id"], current, wanted.get(e["id"]), "expenses", bool(e["reminder_id"])))
+    if ops:
+        await store.execute_transaction(ops)
+    return pay, emis
+
+
+async def _synced_payment(store: Any, settings: Settings, payment_id: int) -> dict[str, Any]:
+    """Re-sync the payment's reminders and return it as the screen shows it: one read of the rows, not two."""
+    pay, emis = await sync_reminders(store, settings, payment_id)
+    if not pay:
+        raise NotFound("That payment no longer exists.")
+    return _shape_payment(pay, emis, _today(settings))
+
+
+def _cancel_op(reminder_ids: list[int]) -> tuple[str, tuple[Any, ...]]:
+    marks = ",".join("?" for _ in reminder_ids)
+    return (f"UPDATE reminders SET status = 'cancelled' WHERE status = 'pending' AND id IN ({marks})", tuple(reminder_ids))
 
 
 async def _cancel_reminders(store: Any, reminder_ids: list[int]) -> None:
-    for rid in reminder_ids:
-        await store.execute("UPDATE reminders SET status = 'cancelled' WHERE id = ? AND status = 'pending'", (rid,))
+    if reminder_ids:
+        await store.execute(*_cancel_op(reminder_ids))
 
 
 # ── payments ───────────────────────────────────────────────────────────
@@ -518,6 +546,7 @@ async def create_payment(store: Any, settings: Settings, *, title: Any, total: A
                          emi_amount: Any = None, grp: Any = "") -> dict[str, Any]:
     """Create a payment. ``emi``: give the total OR the per-EMI amount (the other is worked out). ``due``: one dated amount
     (``emi_amount``, or ``total`` if that is all you have; an outstanding ``total`` may be larger). ``open``: just ``total``."""
+    await ensure_custom_backfill(store)                  # before anything is written, so the one-time pass sees only pre-existing data
     title = clean_text(title, "payment", limit=120, required=True)
     kind = str(kind or "emi").lower()
     if kind not in KINDS:
@@ -525,10 +554,10 @@ async def create_payment(store: Any, settings: Settings, *, title: Any, total: A
     category = str(category or "other").lower()
     if category not in CATEGORIES:
         raise ExpenseError(f"The category must be one of: {', '.join(CATEGORIES)}.")
-    bank = await _require_bank_id(store, bank_id)
     remind = _remind_days(remind_days) if kind != "open" else None
     group = _clean_group(grp)
-    if (await store.fetchone("SELECT COUNT(*) AS n FROM ex_payments"))["n"] >= MAX_PAYMENTS:
+    bank, count_row = await asyncio.gather(_require_bank_id(store, bank_id), store.fetchone("SELECT COUNT(*) AS n FROM ex_payments"))
+    if count_row["n"] >= MAX_PAYMENTS:
         raise ExpenseError(f"You can track up to {MAX_PAYMENTS} payments. Delete finished ones first.")
 
     day_int: int | None = None
@@ -584,8 +613,7 @@ async def create_payment(store: Any, settings: Settings, *, title: Any, total: A
         except Exception:
             await store.execute("DELETE FROM ex_payments WHERE id = ?", (payment_id,))
             raise
-    await sync_reminders(store, settings, payment_id)
-    return await get_payment(store, settings, payment_id)
+    return await _synced_payment(store, settings, payment_id)
 
 
 def _remind_days(value: Any) -> int | None:
@@ -649,19 +677,24 @@ async def update_payment(store: Any, settings: Settings, payment_id: int, *, tit
         sets.append("remind_days = ?"); params.append(_remind_days(remind_days))
     if sets:
         await store.execute(f"UPDATE ex_payments SET {', '.join(sets)}, updated_at = ? WHERE id = ?", (*params, _now_iso(), payment_id))
-        await sync_reminders(store, settings, payment_id)
+        return await _synced_payment(store, settings, payment_id)
     return await get_payment(store, settings, payment_id)
 
 
 async def delete_payment(store: Any, payment_id: int) -> None:
     """Removes the payment, its EMIs and their reminders. Bank balances already reduced by paid EMIs are left alone."""
-    await _payment_row(store, payment_id)
-    rows = await store.fetchall("SELECT reminder_id FROM ex_emis WHERE payment_id = ? AND reminder_id IS NOT NULL", (payment_id,))
-    await _cancel_reminders(store, [r["reminder_id"] for r in rows])
-    await store.execute_transaction([
-        ("DELETE FROM ex_emis WHERE payment_id = ?", (payment_id,)),
-        ("DELETE FROM ex_payments WHERE id = ?", (payment_id,)),
-    ])
+    await ensure_custom_backfill(store)
+    pay, rows = await asyncio.gather(
+        store.fetchone("SELECT id FROM ex_payments WHERE id = ?", (payment_id,)),
+        store.fetchall("SELECT reminder_id FROM ex_emis WHERE payment_id = ? AND reminder_id IS NOT NULL", (payment_id,)),
+    )
+    if not pay:
+        raise NotFound("That payment no longer exists.")
+    ops: list[tuple[str, tuple[Any, ...]]] = []
+    if rows:
+        ops.append(_cancel_op([r["reminder_id"] for r in rows]))
+    ops += [("DELETE FROM ex_emis WHERE payment_id = ?", (payment_id,)), ("DELETE FROM ex_payments WHERE id = ?", (payment_id,))]
+    await store.execute_transaction(ops)
 
 
 async def redate(store: Any, settings: Settings, payment_id: int, day: Any) -> dict[str, Any]:
@@ -679,8 +712,7 @@ async def redate(store: Any, settings: Settings, payment_id: int, day: Any) -> d
         ops.append(("UPDATE ex_emis SET due_date = ? WHERE id = ?", (emi_date(current.year, current.month, day_int).isoformat(), e["id"])))
     await store.execute_transaction(ops)
     await _renumber(store, payment_id)
-    await sync_reminders(store, settings, payment_id)
-    return await get_payment(store, settings, payment_id)
+    return await _synced_payment(store, settings, payment_id)
 
 
 async def rebalance(store: Any, settings: Settings, payment_id: int, *, reset: bool = False) -> dict[str, Any]:
@@ -710,8 +742,7 @@ async def rebalance(store: Any, settings: Settings, payment_id: int, *, reset: b
     for i, e in enumerate(auto):
         ops.append(("UPDATE ex_emis SET amount_minor = ?, amount_custom = 0 WHERE id = ?", (base if i < len(auto) - 1 else left - base * (len(auto) - 1), e["id"])))
     await store.execute_transaction(ops)
-    await sync_reminders(store, settings, payment_id)
-    return await get_payment(store, settings, payment_id)
+    return await _synced_payment(store, settings, payment_id)
 
 
 async def _renumber(store: Any, payment_id: int) -> None:
@@ -719,6 +750,16 @@ async def _renumber(store: Any, payment_id: int) -> None:
     ops = [("UPDATE ex_emis SET seq = ? WHERE id = ?", (i + 1, r["id"])) for i, r in enumerate(rows) if r["seq"] != i + 1]
     if ops:
         await store.execute_transaction(ops)
+
+
+async def _emi_context(store: Any, emi_id: int) -> dict[str, Any]:
+    """An EMI together with whether its payment's bank still exists (``bank_row`` is the bank's id or None): one read, not three."""
+    await ensure_custom_backfill(store)
+    row = await store.fetchone(
+        "SELECT e.*, b.id AS bank_row FROM ex_emis e JOIN ex_payments p ON p.id = e.payment_id LEFT JOIN ex_banks b ON b.id = p.bank_id WHERE e.id = ?", (emi_id,))
+    if not row:
+        raise NotFound("That EMI no longer exists.")
+    return row
 
 
 async def _emi_row(store: Any, emi_id: int) -> dict[str, Any]:
@@ -748,8 +789,7 @@ async def add_emi(store: Any, settings: Settings, payment_id: int, *, amount: An
     typed = 1 if amount not in (None, "") else 0                      # an amount the user typed is kept when spreading
     await store.execute("INSERT INTO ex_emis (payment_id, seq, amount_minor, due_date, amount_custom) VALUES (?, ?, ?, ?, ?)", (payment_id, len(emis) + 1, minor, due.isoformat(), typed))
     await _renumber(store, payment_id)
-    await sync_reminders(store, settings, payment_id)
-    return await get_payment(store, settings, payment_id)
+    return await _synced_payment(store, settings, payment_id)
 
 
 async def delete_emi(store: Any, settings: Settings, emi_id: int) -> dict[str, Any]:
@@ -762,16 +802,14 @@ async def delete_emi(store: Any, settings: Settings, emi_id: int) -> dict[str, A
         await _cancel_reminders(store, [emi["reminder_id"]])
     await store.execute("DELETE FROM ex_emis WHERE id = ?", (emi_id,))
     await _renumber(store, emi["payment_id"])
-    await sync_reminders(store, settings, emi["payment_id"])
-    return await get_payment(store, settings, emi["payment_id"])
+    return await _synced_payment(store, settings, emi["payment_id"])
 
 
 async def update_emi(store: Any, settings: Settings, emi_id: int, *, amount: Any = _UNSET, due_date: Any = _UNSET, paid: Any = _UNSET,
                      deduct: bool = False, custom: Any = _UNSET) -> dict[str, Any]:
     async with _lock:
-        emi = await _emi_row(store, emi_id)
+        emi = await _emi_context(store, emi_id)
         payment_id = emi["payment_id"]
-        pay = await _payment_row(store, payment_id)
         edits = amount is not _UNSET or due_date is not _UNSET
         if edits and emi["paid_at"] and paid is not False:
             raise ExpenseError("This EMI is marked paid. Mark it unpaid before changing its amount or date.")
@@ -790,22 +828,22 @@ async def update_emi(store: Any, settings: Settings, emi_id: int, *, amount: Any
             ops.append(("UPDATE ex_emis SET due_date = ? WHERE id = ?", (parse_date(due_date, "EMI date").isoformat(), emi_id)))
         if paid is True and not emi["paid_at"]:
             ops.append(("UPDATE ex_emis SET paid_at = ? WHERE id = ?", (_now_iso(), emi_id)))
-            if deduct and pay["bank_id"]:
-                bank = await store.fetchone("SELECT id FROM ex_banks WHERE id = ?", (pay["bank_id"],))
-                if bank:
-                    taken = to_minor(amount) if amount is not _UNSET else emi["amount_minor"]       # an edit in the same call counts
-                    ops.append(("UPDATE ex_banks SET balance_minor = balance_minor - ?, updated_at = ? WHERE id = ?", (taken, _now_iso(), bank["id"])))
-                    ops.append(("UPDATE ex_emis SET deducted_bank_id = ?, deducted_minor = ? WHERE id = ?", (bank["id"], taken, emi_id)))
+            if deduct and emi["bank_row"]:
+                taken = to_minor(amount) if amount is not _UNSET else emi["amount_minor"]       # an edit in the same call counts
+                ops.append(("UPDATE ex_banks SET balance_minor = balance_minor - ?, updated_at = ? WHERE id = ?", (taken, _now_iso(), emi["bank_row"])))
+                ops.append(("UPDATE ex_emis SET deducted_bank_id = ?, deducted_minor = ? WHERE id = ?", (emi["bank_row"], taken, emi_id)))
         if ops:
             await store.execute_transaction(ops)
         if due_date is not _UNSET:
             await _renumber(store, payment_id)
-        await sync_reminders(store, settings, payment_id)
-    return await get_payment(store, settings, payment_id)
+        return await _synced_payment(store, settings, payment_id)
 
 
 async def set_emis_paid(store: Any, settings: Settings, emi_ids: list[Any], *, paid: bool, deduct: bool = False) -> dict[str, Any]:
-    """Mark several EMIs paid (or unpaid) in one go. EMIs already in the requested state are skipped, not errors."""
+    """Mark several EMIs paid (or unpaid) in one go. EMIs already in the requested state are skipped, not errors.
+
+    All the changes (including bank balances, restored to the paisa when un-marking) are one transaction, and each affected
+    payment's reminders are re-synced once, not once per EMI."""
     ids: list[int] = []
     for raw in emi_ids or []:
         try:
@@ -818,13 +856,36 @@ async def set_emis_paid(store: Any, settings: Settings, emi_ids: list[Any], *, p
         raise ExpenseError("Select at least one EMI first.")
     if len(ids) > MAX_BULK:
         raise ExpenseError(f"Select at most {MAX_BULK} EMIs at a time.")
-    rows = [await _emi_row(store, i) for i in ids]                      # all must exist before anything changes
-    changed = 0
-    for row in sorted(rows, key=lambda r: (r["due_date"], r["id"])):
-        if bool(row["paid_at"]) == bool(paid):
-            continue
-        await update_emi(store, settings, row["id"], paid=bool(paid), deduct=deduct)
-        changed += 1
+    await ensure_custom_backfill(store)
+    async with _lock:
+        marks = ",".join("?" for _ in ids)
+        rows = await store.fetchall(
+            f"SELECT e.*, b.id AS bank_row FROM ex_emis e JOIN ex_payments p ON p.id = e.payment_id LEFT JOIN ex_banks b ON b.id = p.bank_id WHERE e.id IN ({marks})", tuple(ids))
+        if len(rows) != len(ids):
+            raise NotFound("That EMI no longer exists.")                         # all must exist before anything changes
+        ops: list[tuple[str, tuple[Any, ...]]] = []
+        touched: list[int] = []
+        changed = 0
+        stamp = _now_iso()
+        for row in sorted(rows, key=lambda r: (r["due_date"], r["id"])):
+            if bool(row["paid_at"]) == bool(paid):
+                continue
+            changed += 1
+            if row["payment_id"] not in touched:
+                touched.append(row["payment_id"])
+            if paid:
+                ops.append(("UPDATE ex_emis SET paid_at = ? WHERE id = ?", (stamp, row["id"])))
+                if deduct and row["bank_row"]:
+                    ops.append(("UPDATE ex_banks SET balance_minor = balance_minor - ?, updated_at = ? WHERE id = ?", (row["amount_minor"], stamp, row["bank_row"])))
+                    ops.append(("UPDATE ex_emis SET deducted_bank_id = ?, deducted_minor = ? WHERE id = ?", (row["bank_row"], row["amount_minor"], row["id"])))
+            else:
+                ops.append(("UPDATE ex_emis SET paid_at = NULL, deducted_bank_id = NULL, deducted_minor = NULL WHERE id = ?", (row["id"],)))
+                if row["deducted_bank_id"] and row["deducted_minor"]:           # give back exactly what was taken
+                    ops.append(("UPDATE ex_banks SET balance_minor = balance_minor + ?, updated_at = ? WHERE id = ?", (row["deducted_minor"], stamp, row["deducted_bank_id"])))
+        if ops:
+            await store.execute_transaction(ops)
+        for payment_id in touched:
+            await sync_reminders(store, settings, payment_id)
     return {"changed": changed, "skipped": len(ids) - changed}
 
 

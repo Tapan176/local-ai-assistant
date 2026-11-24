@@ -121,6 +121,28 @@ Upgrading keeps your data: schema changes are additive only (new columns with de
 version reads existing payments it also protects EMI amounts you had edited by hand, inferred from the data, without
 changing any amount.
 
+## Work
+
+The *Work* tab is the same task list the chat and the Today panel use, with projects and a place for notes.
+
+- **Tasks**: type one line and press Enter, or open the detailed form for a project, priority, due date and time, a reminder and
+  details. A date without a time means *by the end of that day*, so a task due today is not overdue until the day is over. Open
+  tasks are grouped Overdue, Today, This week, Later and No date; tick several quickly and every tick is saved.
+- **Reminders follow the task**: at the due time, 9 am that morning, or 9 am the day before. Moving the date moves the reminder;
+  finishing or deleting the task (here, in chat or on the Today panel) cancels it; clearing the date clears it.
+- **Notes & plans**: meeting notes, plans and ideas with tags and pinning, searchable as you type.
+- **From chat**: "add a task to the Atlas project: draft the spec by Friday, remind me that morning", "save a work note: …".
+
+## Growth
+
+The *Growth* tab keeps what you want to remember about living and working well.
+
+- **Journal**: learnings, lessons, quotes and thoughts, with tags, search, pinning and a filter per kind.
+- **Rulebook**: your own rules, numbered in the order you wrote them. The first line is the rule; the lines after are why it matters.
+- **For today**: one rule, quote or lesson, the same all day and different tomorrow (pinned ones are preferred); *Another one*
+  shows more without changing today's pick.
+- **From chat**: "save this lesson: …", "add a rule: …", "what are my rules about money?", "a thought for today".
+
 ## Weather
 
 Free providers with automatic fallback and no API keys: Open-Meteo, then MET Norway, then wttr.in (geocoding falls back to
@@ -197,6 +219,16 @@ select cron.schedule('keep-assistant-awake', '*/10 * * * *',
   $$ select net.http_get(url := 'https://YOUR-SERVICE.onrender.com/health', timeout_milliseconds := 20000); $$);
 -- undo: select cron.unschedule('keep-assistant-awake');
 ```
+
+### Why saves can feel slow, and what is done about it
+
+A request that touches the database costs a network round trip per statement, and a free Render server and a free Supabase
+database are rarely in the same place (about 60 ms between Singapore and Mumbai). The app therefore sends each multi-statement
+write as one message (atomic, values bound by psycopg), reads independent data in parallel, and re-syncs reminders in one
+transaction instead of one query per EMI. Measured at 60 ms a hop, saving a 24-EMI payment went from 4.4 s to 0.7 s, "spread
+equally" from 4.4 s to 0.5 s and marking five EMIs paid from 5.4 s to 0.3 s. `TAPAN_PG_BATCH=0` switches back to one statement
+per hop. Pick a Render region next to your database. Every request also shows a loading pill ("Saving…", "Loading…") that counts the
+seconds and says when the server is slow.
 
 One always-on free web service uses about 730 of Render's 750 free instance hours a month, so this only works if it is your
 only free service. For a guaranteed always-on server switch `plan: free` to `starter` in `render.yaml`.

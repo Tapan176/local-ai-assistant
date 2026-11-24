@@ -328,9 +328,9 @@ def create_api(
         async def complete_task(task_id: int) -> dict[str, bool]:
             if not await runtime.sqlite_store.fetchone("SELECT id FROM tasks WHERE id = ? AND status = 'open'", (task_id,)):
                 raise HTTPException(status_code=404, detail="No open task with that id")
-            await runtime.sqlite_store.execute(
-                "UPDATE tasks SET status = 'done', completed_at = ? WHERE id = ?", (datetime.now(timezone.utc).isoformat(), task_id)
-            )
+            from src.agent import workspace                      # shared with chat and the Work screen: finishing a task also cancels its reminder
+
+            await workspace.set_task_done(runtime.sqlite_store, settings, task_id, True)
             return {"ok": True}
 
         @app.delete("/api/reminders/{reminder_id}", dependencies=[Depends(require_auth)])

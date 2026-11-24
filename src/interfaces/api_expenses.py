@@ -158,8 +158,7 @@ def register(app: FastAPI, *, runtime: Any, settings: Settings, require_auth: Ca
     @app.get("/api/expenses", dependencies=auth)
     async def snapshot(exclude: str = "") -> dict[str, Any]:
         """``exclude``: comma-separated group names ('~ungrouped' for payments without one) left out of the overview totals."""
-        data = await guarded(expenses.snapshot(store, settings, exclude=exclude[:600]))
-        card = await guarded(spending.card(store, settings))
+        data, card = await asyncio.gather(guarded(expenses.snapshot(store, settings, exclude=exclude[:600])), guarded(spending.card(store, settings)))
         data["spending"] = card
         data["insights"] = data["insights"] + spending.card_insights(card, settings.currency)
         return data

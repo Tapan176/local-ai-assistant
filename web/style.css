@@ -641,3 +641,60 @@ button:disabled { cursor: progress; opacity: 0.6; }
 
 /* the four top tabs must fit on the narrowest phones without sideways scrolling */
 @media (max-width: 340px) { .tabs { gap: 2px; } .tabs button, .tabs button { padding: 6px 8px; font-size: 0.8rem; } }
+
+/* ── Work and Growth ──────────────────────────────────────── */
+.wk-quick { display: flex; gap: 8px; }
+.wk-quick input, .wk-filters input[type="search"], .mn-view > input[type="search"] { flex: 1; min-width: 0; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 10px; color: var(--text); font: inherit; font-size: 16px; padding: 10px 12px; min-height: 44px; }
+.wk-quick .wide-btn { width: auto; padding: 0 18px; flex: none; }
+.wk-filters { display: flex; flex-direction: column; gap: 8px; }
+.wk-filters select { min-width: 0; }
+.pk-seg { flex-wrap: wrap; }
+.wk-group { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.wk-group-t { margin: 0; font-size: 0.8rem; letter-spacing: 0.6px; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.wk-group-t.bad { color: var(--danger); }
+.wk-task { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); flex-wrap: wrap; }
+.wk-task.overdue { border-color: rgba(255, 77, 109, 0.5); }
+.wk-task.done .mn-emi-t { text-decoration: line-through; color: var(--muted); }
+.wk-task:has(.mn-form) { display: block; }
+.wk-task.overdue .mn-emi-s { color: var(--danger); }
+.wk-acts { display: flex; gap: 2px; margin-left: auto; }
+.wk-details { white-space: pre-wrap; overflow-wrap: anywhere; }
+.wk-list { display: flex; flex-direction: column; gap: 8px; }
+.mn-chip.prio-high { color: var(--danger); border-color: rgba(255, 77, 109, 0.5); }
+.mn-chip.pinned { color: var(--accent); border-color: rgba(0, 255, 136, 0.4); }
+.wk-note { display: flex; flex-direction: column; gap: 6px; }
+.wk-note-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.wk-note-title { overflow-wrap: anywhere; }
+.wk-note-rule { margin: 0; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; white-space: pre-wrap; }
+.wk-note-body { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; font-size: 0.92rem; }
+.wk-note.k-quote .wk-note-body { font-style: italic; }
+.wk-tags, .wk-tagrow { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; }
+.tag-btn { cursor: pointer; font: inherit; font-size: 0.75rem; min-height: 32px; padding: 2px 10px; }
+.tag-btn[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: rgba(0, 255, 136, 0.4); }
+.wk-today { display: flex; flex-direction: column; gap: 6px; border-color: rgba(0, 255, 136, 0.3); }
+
+/* ── Loading feedback and long lists ──────────────────────── */
+.busy { position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 12px); transform: translateX(-50%); z-index: 1000; display: flex; align-items: center; gap: 10px;
+  padding: 8px 16px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line-strong); color: var(--text); font-size: 0.88rem; max-width: calc(100vw - 24px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); pointer-events: none; }
+.busy.hidden, .busy-bar.hidden { display: none; }
+.busy-bar { position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 1001; overflow: hidden; pointer-events: none; }
+.busy-bar::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 40%; background: var(--accent); border-radius: 2px; animation: busy-slide 1.1s ease-in-out infinite; }
+.spinner { width: 15px; height: 15px; flex: none; border-radius: 50%; border: 2px solid var(--line-strong); border-top-color: var(--accent); animation: busy-spin 0.8s linear infinite; }
+@keyframes busy-spin { to { transform: rotate(360deg); } }
+@keyframes busy-slide { from { transform: translateX(-100%); } to { transform: translateX(260%); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } .busy-bar::after { animation-duration: 3s; } }
+.panel[aria-busy="true"] .wide-btn { opacity: 0.6; }
+.scroll-box { max-height: min(52vh, 440px); overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; scrollbar-width: thin; scrollbar-color: var(--accent) var(--surface-3);
+  border-radius: 10px; scroll-padding: 8px; }
+.scroll-box:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.scroll-box::-webkit-scrollbar { width: 8px; }
+.scroll-box::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 4px; }
+.scroll-box::-webkit-scrollbar-track { background: var(--surface-3); border-radius: 4px; }
+
+/* header: six tabs share one row with the close button and scroll sideways; the loading pill sits above the toast, never over the tabs */
+.side-head { flex-wrap: nowrap; }
+.side-head .tabs { flex: 1 1 0; min-width: 0; display: flex; }
+.side-head .tabs button { flex: none; }
+.side-actions { flex: none; }
+.busy { top: auto; bottom: calc(142px + env(safe-area-inset-bottom, 0px)); }

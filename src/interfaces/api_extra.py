@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.agent import actions, timeutil, weather
 from src.config.settings import Settings
-from src.interfaces import api_expenses, api_telegram
+from src.interfaces import api_expenses, api_telegram, api_workspace
 
 CLIENT_REPORT_LIMIT = 8
 
@@ -57,6 +57,7 @@ def register(app: FastAPI, *, runtime: Any, settings: Settings, require_auth: Ca
              started_at: float, ui_version: str) -> None:
     store = runtime.sqlite_store
     api_expenses.register(app, runtime=runtime, settings=settings, require_auth=require_auth, limiter=limiter)
+    api_workspace.register(app, runtime=runtime, settings=settings, require_auth=require_auth, limiter=limiter)
     if getattr(runtime, "telegram", None):
         api_telegram.register(app, runtime=runtime, settings=settings, require_auth=require_auth, limiter=limiter)
 

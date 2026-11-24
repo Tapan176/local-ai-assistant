@@ -11,6 +11,9 @@ const settingsJs = fs.readFileSync(ROOT + "settings.js", "utf8");
 const integrationsJs = fs.readFileSync(ROOT + "settings-integrations.js", "utf8");
 const moneyJs = fs.readFileSync(ROOT + "money.js", "utf8");
 const moneySpendJs = fs.readFileSync(ROOT + "money-spend.js", "utf8");
+const kitJs = fs.readFileSync(ROOT + "panel-kit.js", "utf8");
+const workJs = fs.readFileSync(ROOT + "work.js", "utf8");
+const growthJs = fs.readFileSync(ROOT + "growth.js", "utf8");
 
 let failures = 0;
 const check = (name, cond, extra = "") => { console.log((cond ? "PASS " : "FAIL ") + name + (cond ? "" : "   " + extra)); if (!cond) failures++; };
@@ -82,6 +85,9 @@ function boot({ storage = {}, coarse = false, routes: extra = {}, url, ua, stand
   w.eval(integrationsJs);
   w.eval(moneyJs);
   w.eval(moneySpendJs);
+  w.eval(kitJs);
+  w.eval(workJs);
+  w.eval(growthJs);
   w.init();
   const $ = (id) => w.document.getElementById(id);
   return {
@@ -662,8 +668,14 @@ const authed = (t, s = t.sockets[t.sockets.length - 1]) => { t.open(s); t.say(s,
   check("settings: every button in the tab is a real, named button", [...u.$("panel-settings").querySelectorAll("button")].every((b) => b.textContent.trim().length > 0));
   u.key(u.$("tab-history"), { key: "ArrowRight" });
   check("settings: arrow keys step to Money, then Settings", u.$("tab-money").getAttribute("aria-selected") === "true" && u.$("tab-money").tabIndex === 0 && u.$("tab-today").tabIndex === -1);
-  u.key(u.$("tab-money"), { key: "ArrowRight" });
-  check("settings: ...and Settings is the fourth tab", u.$("tab-settings").getAttribute("aria-selected") === "true" && u.$("tab-settings").tabIndex === 0);
+  check("settings: ...then Work and Growth, and Settings is the last of the six tabs", (() => {
+    u.key(u.$("tab-money"), { key: "ArrowRight" });
+    const work = u.$("tab-work").getAttribute("aria-selected") === "true" && !u.$("panel-work").classList.contains("hidden");
+    u.key(u.$("tab-work"), { key: "ArrowRight" });
+    const growth = u.$("tab-growth").getAttribute("aria-selected") === "true" && !u.$("panel-growth").classList.contains("hidden");
+    u.key(u.$("tab-growth"), { key: "ArrowRight" });
+    return work && growth && u.$("tab-settings").getAttribute("aria-selected") === "true" && u.$("tab-settings").tabIndex === 0;
+  })());
   u.key(u.$("tab-settings"), { key: "ArrowRight" });
   check("settings: ...and wrap around to the first", u.$("tab-today").getAttribute("aria-selected") === "true");
   const deep = boot({ drawer: true, url: "https://tapan.example.com/web/index.html?panel=settings", routes: m0Routes() }); await wait(40);
@@ -783,7 +795,7 @@ const authed = (t, s = t.sockets[t.sockets.length - 1]) => { t.open(s); t.say(s,
   const mbtn = (m, label, root) => [...(root || m.t.$("panel-money")).querySelectorAll("button")].find((b) => b.textContent.trim() === label);
 
   let m = moneyBoot(); await wait(60);
-  check("money: there are four tabs and Money sits between History and Settings", [...m.t.w.document.querySelectorAll('[role="tab"]')].map((b) => b.textContent).join(",") === "Today,History,Money,Settings");
+  check("money: there are six tabs and Money sits between History and Work", [...m.t.w.document.querySelectorAll('[role="tab"]')].map((b) => b.textContent).join(",") === "Today,History,Money,Work,Growth,Settings");
   await openMoney(m);
   check("money: the tab opens its panel and hides the others", m.t.$("tab-money").getAttribute("aria-selected") === "true" && !m.t.$("panel-money").classList.contains("hidden") && m.t.$("panel-settings").classList.contains("hidden"));
   check("money: overview asks the server once for everything", m.calls("GET", "/api/expenses").length === 1);
@@ -956,7 +968,7 @@ const authed = (t, s = t.sockets[t.sockets.length - 1]) => { t.open(s); t.say(s,
       "POST /api/expenses/emis/bulk": () => ({ changed: 2, skipped: 0 }),
       "PATCH /api/expenses/payments/": () => ({ id: 3 }),
       "PATCH /api/expenses/emis/": (url) => { const id = Number(url.split("/").pop()); const b = lastBody(); state.pays.forEach((p) => p.emis.forEach((e) => { if (e.id === id && b.paid !== undefined) { e.status = b.paid ? "paid" : "upcoming"; e.paid_at = b.paid ? "2026-11-24T10:00:00+00:00" : null; } })); return slow({ id }); },
-      "GET /api/expenses": () => snapNow(),
+      "GET /api/expenses": () => (state.reloadDelay ? new Promise((res) => setTimeout(() => res(snapNow()), state.reloadDelay)) : snapNow()),
       "POST /api/expenses/payments": () => ({ id: 99 }),
       "POST /api/expenses/banks": () => ({ id: 8 }),
     });
@@ -1183,6 +1195,338 @@ const authed = (t, s = t.sockets[t.sockets.length - 1]) => { t.open(s); t.say(s,
     check(`money v2: ${view} still has no unnamed buttons and no unlabelled fields`, unnamed2.length === 0 && unlabelled2.length === 0, `${unnamed2.length}/${unlabelled2.length}`);
   }
   check("money v2: neither Money script uses innerHTML-style injection or inline handlers", !/innerHTML|insertAdjacentHTML|outerHTML|onclick=/.test(fs.readFileSync(ROOT + "money-spend.js", "utf8")));
+
+
+  // ═══════════════ Work and Growth tabs ═══════════════
+  const wTask = (id, title, o = {}) => ({ id, title, project: "", priority: "normal", status: "open", due_at: null, due_date: null, due_time: null, overdue: false, due_today: false, details: "", remind: "", completed_at: null, ...o });
+  const wNote = (id, kind, body, o = {}) => ({ id, space: "work", kind, title: "", body, tags: [], pinned: false, created_at: "2026-11-20T10:00:00+00:00", updated_at: "2026-11-20T10:00:00+00:00", ...o });
+  const workData = () => ({
+    tasks: [wTask(1, "Send the report", { project: "Atlas", priority: "high", due_date: "2026-11-22", overdue: true, remind: "morning" }), wTask(2, "Call vendor", { project: "Ops", due_date: "2026-11-24", due_time: "17:30", due_today: true }),
+      wTask(3, "Prepare slides", { due_date: "2026-11-28" }), wTask(4, "Plan offsite", { due_date: "2026-12-20" }), wTask(5, "Tidy inbox", { details: "the shared one" })],
+    overview: { open: 5, overdue: 1, due_today: 1, high: 1, no_date: 1, done_7d: 3, projects: [{ name: "Atlas", open: 1, overdue: 1 }, { name: "Ops", open: 1, overdue: 0 }] },
+    notes: [wNote(12, "meeting", "Decided: ship Friday", { pinned: true }), wNote(11, "plan", "Launch plan\nStep 1", { title: "Q4 launch", tags: ["q4"] }), wNote(13, "idea", "Weekly demo")],
+    priorities: ["high", "normal", "low"], kinds: ["note", "plan", "meeting", "idea"], today: "2026-11-24",
+  });
+  function workBoot(over = {}, specific = {}) {
+    const state = { data: workData(), delay: 0, ...over };
+    const holder = {};
+    const lastBody = () => { const wk = holder.t.calls.filter((c) => c.method !== "GET"); return JSON.parse(wk[wk.length - 1].body || "{}"); };
+    const slow = (v) => (state.delay ? new Promise((res) => setTimeout(() => res(v), state.delay)) : v);
+    const routes = m0Routes({
+      ...specific,
+      "GET /api/work": (url) => { const u = new URL(url, "https://x"); const st = u.searchParams.get("status") || "open", pr = u.searchParams.get("project");
+        return { ...state.data, tasks: state.data.tasks.filter((t) => (st === "all" || (st === "done") === (t.status === "done")) && (!pr || t.project === pr)) }; },
+      "POST /api/work/tasks/": (url) => { const id = Number(url.split("/")[4]); const done = lastBody().done; state.data.tasks.forEach((t) => { if (t.id === id) { t.status = done ? "done" : "open"; t.completed_at = done ? "2026-11-24T09:00:00+00:00" : null; } }); return slow({ id }); },
+      "POST /api/work/tasks": () => ({ id: 99 }), "PATCH /api/work/tasks/": () => ({ id: 1 }), "DELETE /api/work/tasks/": () => ({ ok: true }),
+      "POST /api/notebook": () => ({ id: 98 }), "PATCH /api/notebook/": () => ({ id: 11 }), "DELETE /api/notebook/": () => ({ ok: true }),
+    });
+    const t = boot({ drawer: true, routes }); holder.t = t; authed(t);
+    return { t, state, lastBody, calls: (method, prefix) => t.calls.filter((c) => c.method === method && c.url.startsWith(prefix)) };
+  }
+  const openTab = async (m, tab) => { m.t.$("today-btn").click(); m.t.$(`tab-${tab}`).click(); await wait(80); };
+  const pnl = (m, tab) => m.t.$(`panel-${tab}`);
+  const tbtn = (m, tab, label, root) => [...(root || pnl(m, tab)).querySelectorAll("button")].find((b) => b.textContent.trim() === label);
+  const ptext = (m, tab) => pnl(m, tab).textContent;
+
+  let wk = workBoot(); await wait(60); await openTab(wk, "work");
+  check("work: the tab opens its panel and asks for open tasks", wk.t.$("tab-work").getAttribute("aria-selected") === "true" && !pnl(wk, "work").classList.contains("hidden") && wk.calls("GET", "/api/work?status=open").length === 1);
+  check("work: the headline counts are shown with words", /Open5/.test(ptext(wk, "work").replace(/\s/g, "")) && /Overdue1needsattention/.test(ptext(wk, "work").replace(/\s/g, "")) && /Donethisweek3/.test(ptext(wk, "work").replace(/\s/g, "")));
+  check("work: open tasks are grouped Overdue, Today, This week, Later, No date, in that order, each with a count", [...pnl(wk, "work").querySelectorAll(".wk-group-t")].map((e) => e.textContent).join("|") === "Overdue · 1|Today · 1|This week · 1|Later · 1|No date · 1");
+  check("work: an overdue task says by how long, a due-today one says its time", /Overdue by 2 days · was due 22 Nov 2026/.test(ptext(wk, "work")) && /Due today at 17:30/.test(ptext(wk, "work")));
+  check("work: priority, project and reminders are visible as text, not colour alone", /High/.test(ptext(wk, "work")) && /Atlas/.test(ptext(wk, "work")) && /reminder on/.test(ptext(wk, "work")));
+  check("work: a task's details are shown", /the shared one/.test(ptext(wk, "work")));
+
+  // quick add
+  const quickForm = () => pnl(wk, "work").querySelector('form[aria-label="Add a task"]');
+  await submitForm(wk, quickForm());
+  check("work: submitting an empty quick-add says what to do and sends nothing", wk.calls("POST", "/api/work/tasks").length === 0 && /Type the task first/.test(wk.t.$("toast").textContent));
+  typeIn(wk, quickForm(), "title", "Book the venue"); await submitForm(wk, quickForm());
+  reqBody = wk.lastBody();
+  check("work: quick add posts the title once", wk.calls("POST", "/api/work/tasks").length === 1 && reqBody.title === "Book the venue" && reqBody.project === "");
+  check("work: ...clears the box and puts focus back in it for the next task", quickForm().querySelector("input").value === "" && wk.t.w.document.activeElement.dataset.fk === "quick:title");
+
+  // project filter
+  const projSel = () => [...pnl(wk, "work").querySelectorAll("select")].find((s) => s.dataset.fk === "wk:project");
+  check("work: the project list shows how many are open in each", [...projSel().options].map((o) => o.textContent).join("|") === "All projects|Atlas (1)|Ops (1)");
+  projSel().value = "Ops"; projSel().dispatchEvent(evt(wk, "change")); await wait(80);
+  check("work: choosing a project asks the server for just that project and keeps focus there", wk.calls("GET", "/api/work?status=open&project=Ops").length === 1 && wk.t.w.document.activeElement.dataset.fk === "wk:project");
+  check("work: ...only that project's tasks are listed", [...pnl(wk, "work").querySelectorAll(".wk-task .mn-emi-t")].length === 1 && /Call vendor/.test(ptext(wk, "work")));
+  check("work: ...and quick add now says it will add to that project", quickForm().querySelector("input").placeholder === "Add a task to Ops");
+  typeIn(wk, quickForm(), "title", "Renew the contract"); await submitForm(wk, quickForm());
+  check("work: ...and does", wk.lastBody().project === "Ops");
+  projSel().value = ""; projSel().dispatchEvent(evt(wk, "change")); await wait(80);
+
+  // status
+  tbtn(wk, "work", "Done").click(); await wait(80);
+  check("work: the Done filter asks for done tasks and says so when there are none", wk.calls("GET", "/api/work?status=done").length === 1 && /Nothing finished yet/.test(ptext(wk, "work")) && tbtn(wk, "work", "Done").getAttribute("aria-pressed") === "true");
+  tbtn(wk, "work", "Open").click(); await wait(80);
+
+  // ticking
+  const tickBox = (id) => [...pnl(wk, "work").querySelectorAll("input[type=checkbox]")].find((b) => b.dataset.fk === `task:${id}`);
+  check("work: every task has a checkbox whose name says what ticking does", [...pnl(wk, "work").querySelectorAll(".wk-task .mn-check")].every((l) => /Tick to mark done/.test(l.textContent)));
+  tickBox(5).click(); await wait(80);
+  check("work: ticking a task posts done:true to its own URL", wk.calls("POST", "/api/work/tasks/5/done").length === 1 && wk.lastBody().done === true);
+  wk = workBoot({ delay: 60 }); await wait(60); await openTab(wk, "work");
+  const t2 = (id) => [...pnl(wk, "work").querySelectorAll("input[type=checkbox]")].find((b) => b.dataset.fk === `task:${id}`);
+  t2(3).click(); t2(4).click(); t2(5).click(); await wait(500);
+  check("work: ticking three tasks in a row saves all three, in order", wk.calls("POST", "/api/work/tasks/").map((c) => c.url.split("/")[4]).join(",") === "3,4,5");
+  wk = workBoot({ delay: 80 }); await wait(60); await openTab(wk, "work");
+  const one2 = [...pnl(wk, "work").querySelectorAll("input[type=checkbox]")].find((b) => b.dataset.fk === "task:2");
+  one2.click(); one2.click(); await wait(300);
+  check("work: a second tap on the same task while it saves is ignored", wk.calls("POST", "/api/work/tasks/2/done").length === 1);
+
+  // detailed form
+  wk = workBoot(); await wait(60); await openTab(wk, "work");
+  tbtn(wk, "work", "+ Task with details").click(); await wait(10);
+  const tf = () => pnl(wk, "work").querySelector('form[aria-label="Add a task with details"]');
+  check("work: the detailed form has every field labelled, and starts in the title", !!tf() && ["title", "project", "priority", "due_date", "due_time", "remind", "details"].every((n) => tf().querySelector(`[name="${n}"]`)) && wk.t.w.document.activeElement.dataset.fk === "add-task:title");
+  check("work: its project box suggests your projects", [...tf().querySelectorAll("datalist option")].map((o) => o.value).join(",") === "Atlas,Ops");
+  typeIn(wk, tf(), "title", "Prepare board deck"); typeIn(wk, tf(), "project", "Board"); const pr = tf().querySelector('[name="priority"]'); pr.value = "high"; pr.dispatchEvent(evt(wk, "input"));
+  typeIn(wk, tf(), "remind", ""); const rem = tf().querySelector('[name="remind"]'); rem.value = "due"; rem.dispatchEvent(evt(wk, "input"));
+  await submitForm(wk, tf());
+  check("work: a reminder with no due date is refused with a reason, and nothing is sent", /needs a due date/.test(wk.t.$("toast").textContent) && wk.calls("POST", "/api/work/tasks").length === 0);
+  typeIn(wk, tf(), "due_date", "2026-12-02"); await submitForm(wk, tf());
+  check("work: 'at the due time' without a time is refused too", /Pick a time/.test(wk.t.$("toast").textContent) && wk.calls("POST", "/api/work/tasks").length === 0);
+  typeIn(wk, tf(), "due_time", "15:00"); await submitForm(wk, tf());
+  reqBody = wk.lastBody();
+  check("work: a complete task posts title, project, priority, a date-and-time and the reminder", reqBody.title === "Prepare board deck" && reqBody.project === "Board" && reqBody.priority === "high" && reqBody.due === "2026-12-02T15:00" && reqBody.remind === "due");
+  check("work: the form closes afterwards", !tf());
+  tbtn(wk, "work", "+ Task with details").click(); await wait(10);
+  typeIn(wk, tf(), "title", "Just a date"); typeIn(wk, tf(), "due_date", "2026-12-03"); await submitForm(wk, tf());
+  check("work: a date alone is sent as a date alone (due by the end of that day)", wk.lastBody().due === "2026-12-03" && wk.lastBody().remind === "");
+
+  // edit and delete
+  wk = workBoot(); await wait(60); await openTab(wk, "work");
+  tbtn(wk, "work", "Edit", [...pnl(wk, "work").querySelectorAll(".wk-task")][0]).click(); await wait(10);
+  const ef2 = () => pnl(wk, "work").querySelector('form[aria-label="Edit Send the report"]');
+  check("work: editing opens a prefilled form in place", !!ef2() && ef2().querySelector('[name="title"]').value === "Send the report" && ef2().querySelector('[name="due_date"]').value === "2026-11-22" && ef2().querySelector('[name="priority"]').value === "high" && ef2().querySelector('[name="remind"]').value === "morning");
+  typeIn(wk, ef2(), "due_date", ""); await submitForm(wk, ef2());
+  check("work: clearing the date sends due:null and no reminder (a reminder needs a date)", wk.lastBody().due === null && wk.lastBody().remind === "" && wk.calls("PATCH", "/api/work/tasks/1").length === 1);
+  const delBtn = () => tbtn(wk, "work", "Delete", [...pnl(wk, "work").querySelectorAll(".wk-task")][0]);
+  delBtn().click(); await wait(10);
+  check("work: deleting needs a second tap and warns the reminder goes too", wk.calls("DELETE", "/api/work/tasks/").length === 0 && /Tap again to delete/.test(ptext(wk, "work")) && /its reminder/.test(tbtn(wk, "work", "Tap again to delete").getAttribute("aria-label")));
+  tbtn(wk, "work", "Tap again to delete").click(); await wait(60);
+  check("work: ...then deletes it", wk.calls("DELETE", "/api/work/tasks/1").length === 1);
+
+  // search in place
+  wk = workBoot(); await wait(60); await openTab(wk, "work");
+  const sbox = () => [...pnl(wk, "work").querySelectorAll("input[type=search]")][0];
+  sbox().focus(); sbox().value = "vend"; sbox().dispatchEvent(evt(wk, "input")); await wait(10);
+  check("work: searching narrows the list as you type without rebuilding the box (focus and text stay)", [...pnl(wk, "work").querySelectorAll(".wk-task")].length === 1 && wk.t.w.document.activeElement === sbox() && sbox().value === "vend" && wk.calls("GET", "/api/work").length === 1);
+  sbox().value = "zzz"; sbox().dispatchEvent(evt(wk, "input")); await wait(10);
+  check("work: no match says so", /No tasks match that/.test(ptext(wk, "work")));
+
+  // notes and plans
+  wk = workBoot(); await wait(60); await openTab(wk, "work");
+  tbtn(wk, "work", "Notes & plans").click(); await wait(10);
+  check("work: the Notes & plans section lists notes with a kind and a title, pinned first, with tags", /Q4 launch/.test(ptext(wk, "work")) && /#q4/.test(ptext(wk, "work")) && [...pnl(wk, "work").querySelectorAll(".wk-note")][0].textContent.includes("Pinned") && tbtn(wk, "work", "Notes & plans").getAttribute("aria-pressed") === "true");
+  tbtn(wk, "work", "+ New note or plan").click(); await wait(10);
+  const nf = () => pnl(wk, "work").querySelector('form[aria-label="Add to your notes"]');
+  check("work: the note form starts in the text box", !!nf() && wk.t.w.document.activeElement.dataset.fk === "add-note:work:body" && /Note/.test(nf().textContent));
+  const kind = nf().querySelector('[name="kind"]'); kind.value = "plan"; kind.dispatchEvent(evt(wk, "input")); await wait(10);
+  check("work: choosing 'Plan' relabels the text box", /The plan/.test(nf().textContent) && /Goal, steps, who does what/.test(nf().querySelector("textarea").placeholder));
+  typeIn(wk, nf(), "body", "Goal: ship v2\nStep 1: test"); typeIn(wk, nf(), "title", "v2 plan"); typeIn(wk, nf(), "tags", "Q4, Launch"); await submitForm(wk, nf());
+  reqBody = wk.lastBody();
+  check("work: saving posts the space, kind, title, text and tags exactly as typed", reqBody.space === "work" && reqBody.kind === "plan" && reqBody.title === "v2 plan" && reqBody.body === "Goal: ship v2\nStep 1: test" && reqBody.tags === "Q4, Launch");
+  check("work: the form stays open for the next note, empty, with focus in it, keeping the kind", nf().querySelector("textarea").value === "" && nf().querySelector('[name="kind"]').value === "plan" && wk.t.w.document.activeElement.dataset.fk === "add-note:work:body");
+  tbtn(wk, "work", "Done", nf()).click(); await wait(10);
+  tbtn(wk, "work", "Meeting").click(); await wait(10);
+  check("work: the kind filter shows only that kind", [...pnl(wk, "work").querySelectorAll(".wk-note")].length === 1 && /Decided: ship Friday/.test(ptext(wk, "work")));
+  tbtn(wk, "work", "All").click(); await wait(10);
+  tbtn(wk, "work", "Pin", [...pnl(wk, "work").querySelectorAll(".wk-note")].find((c) => c.textContent.includes("Weekly demo"))).click(); await wait(60);
+  check("work: Pin sends pinned:true for that note", wk.calls("PATCH", "/api/notebook/13").length === 1 && wk.lastBody().pinned === true);
+  const noteDel = () => tbtn(wk, "work", "Delete", [...pnl(wk, "work").querySelectorAll(".wk-note")][0]);
+  noteDel().click(); await wait(10);
+  check("work: deleting a note needs a second tap", wk.calls("DELETE", "/api/notebook/").length === 0);
+  tbtn(wk, "work", "Tap again to delete").click(); await wait(60);
+  check("work: ...then deletes it", wk.calls("DELETE", "/api/notebook/").length === 1);
+  wk = workBoot({ data: { ...workData(), notes: [], tasks: [], overview: { open: 0, overdue: 0, due_today: 0, high: 0, no_date: 0, done_7d: 0, projects: [] } } }); await wait(60); await openTab(wk, "work");
+  check("work: with nothing yet, tasks explain how to add one, including by chat", /No tasks yet/.test(ptext(wk, "work")) && /add a task: send the report by Friday/.test(ptext(wk, "work")));
+  tbtn(wk, "work", "Notes & plans").click(); await wait(10);
+  check("work: ...and notes say what belongs there", /No notes yet/.test(ptext(wk, "work")) && /For something to do, add a task/.test(ptext(wk, "work")));
+
+  // a11y
+  wk = workBoot(); await wait(60); await openTab(wk, "work");
+  for (const section of ["Tasks", "Notes & plans"]) {
+    tbtn(wk, "work", section).click(); await wait(10);
+    if (section === "Tasks") { tbtn(wk, "work", "+ Task with details").click(); await wait(10); }
+    const unnamedW = [...pnl(wk, "work").querySelectorAll("button")].filter((b) => !(b.textContent.trim() || b.getAttribute("aria-label")));
+    const unlabelledW = [...pnl(wk, "work").querySelectorAll("input, select, textarea")].filter((i) => !(i.closest("label") || i.getAttribute("aria-label")));
+    check(`work: ${section} has no unnamed buttons and no unlabelled fields`, unnamedW.length === 0 && unlabelledW.length === 0, `${unnamedW.length}/${unlabelledW.length}`);
+  }
+
+  // ── growth ──
+  const gNote = (id, kind, body, o = {}) => wNote(id, kind, body, { space: "growth", ...o });
+  const growthData = () => ({
+    total: 6, counts: { learning: 1, lesson: 2, quote: 1, thought: 0, rule: 2 }, kinds: ["learning", "lesson", "quote", "thought", "rule"],
+    tags: [{ tag: "calm", count: 2 }, { tag: "work", count: 1 }],
+    notes: [gNote(21, "rule", "Never reply angry\nBecause I regret every hurried reply", { tags: ["calm"] }), gNote(22, "rule", "Sleep on big decisions", { tags: ["calm"], pinned: true }),
+      gNote(23, "lesson", "Ask for help early", { tags: ["work"] }), gNote(24, "quote", "We suffer more in imagination than in reality", { title: "Seneca" }),
+      gNote(25, "learning", "Pomodoro works for me"), gNote(26, "lesson", "Ship small")],
+    pick: null,
+  });
+  function growthBoot(over = {}) {
+    const state = { data: growthData(), ...over };
+    if (state.data.pick === null && state.data.notes.length) state.data.pick = state.data.notes[1];
+    const holder = {};
+    const lastBody = () => { const wr = holder.t.calls.filter((c) => c.method !== "GET"); return JSON.parse(wr[wr.length - 1].body || "{}"); };
+    const routes = m0Routes({ "GET /api/growth": () => state.data, "POST /api/notebook": () => ({ id: 97 }), "PATCH /api/notebook/": () => ({ id: 22 }), "DELETE /api/notebook/": () => ({ ok: true }) });
+    const t = boot({ drawer: true, routes }); holder.t = t; authed(t);
+    return { t, state, lastBody, calls: (method, prefix) => t.calls.filter((c) => c.method === method && c.url.startsWith(prefix)) };
+  }
+  let g = growthBoot(); await wait(60); await openTab(g, "growth");
+  check("growth: the tab opens and loads once", g.t.$("tab-growth").getAttribute("aria-selected") === "true" && g.calls("GET", "/api/growth").length === 1);
+  check("growth: 'For today' shows the server's pick (the pinned rule)", /For today/.test(ptext(g, "growth")) && pnl(g, "growth").querySelector(".wk-today .wk-note-rule").textContent === "Sleep on big decisions");
+  tbtn(g, "growth", "Another one").click(); await wait(10);
+  const second = pnl(g, "growth").querySelector(".wk-today .wk-note-rule").textContent;
+  check("growth: 'Another one' shows a different item without asking the server", second !== "Sleep on big decisions" && g.calls("GET", "/api/growth").length === 1 && g.t.w.document.activeElement.dataset.fk === "gr:another");
+  check("growth: the counts say what is in the journal and the rulebook", /Journalentries4/.test(ptext(g, "growth").replace(/\s/g, "")) && /Rules2/.test(ptext(g, "growth").replace(/\s/g, "")));
+  check("growth: the journal lists entries but not rules, with kind counts on the filters", /Ask for help early/.test(ptext(g, "growth")) && !/Never reply angry/.test(ptext(g, "growth").split("Rulebook")[1] || "") && !!tbtn(g, "growth", "Lesson (2)") && !!tbtn(g, "growth", "All (4)"));
+  tbtn(g, "growth", "Lesson (2)").click(); await wait(10);
+  check("growth: filtering by kind shows just lessons", [...pnl(g, "growth").querySelectorAll(".wk-note")].length === 2 && tbtn(g, "growth", "Lesson (2)").getAttribute("aria-pressed") === "true");
+  tbtn(g, "growth", "All (4)").click(); await wait(10);
+  const tagBtn = [...pnl(g, "growth").querySelectorAll("button.tag-btn")].find((b) => b.textContent === "#work");
+  tagBtn.click(); await wait(10);
+  check("growth: a tag chip filters, says it is pressed, and clicking again clears it", [...pnl(g, "growth").querySelectorAll(".wk-note")].length === 1 && [...pnl(g, "growth").querySelectorAll("button.tag-btn")].find((b) => b.textContent === "#work").getAttribute("aria-pressed") === "true" && /1 entry/.test(tagBtn.getAttribute("aria-label")));
+  [...pnl(g, "growth").querySelectorAll("button.tag-btn")].find((b) => b.textContent === "#work").click(); await wait(10);
+  check("growth: ...and clearing the tag shows everything again", [...pnl(g, "growth").querySelectorAll(".wk-note")].length === 4);
+  const gsearch = () => [...pnl(g, "growth").querySelectorAll("input[type=search]")][0];
+  gsearch().focus(); gsearch().value = "pomodoro"; gsearch().dispatchEvent(evt(g, "input")); await wait(10);
+  check("growth: search narrows in place and keeps focus", [...pnl(g, "growth").querySelectorAll(".wk-note")].length === 1 && g.t.w.document.activeElement === gsearch());
+
+  g = growthBoot(); await wait(60); await openTab(g, "growth");
+  tbtn(g, "growth", "+ Add to journal").click(); await wait(10);
+  const gf = () => pnl(g, "growth").querySelector('form[aria-label="Add to your journal"]');
+  check("growth: the journal form defaults to Learning and asks the right question", !!gf() && gf().querySelector('[name="kind"]').value === "learning" && /What did you learn\?/.test(gf().textContent));
+  const gk = gf().querySelector('[name="kind"]'); gk.value = "quote"; gk.dispatchEvent(evt(g, "input")); await wait(10);
+  check("growth: choosing Quote asks for the quote and who said it", /The quote/.test(gf().textContent) && /Who said it/.test(gf().textContent));
+  typeIn(g, gf(), "body", "Begin at once"); typeIn(g, gf(), "title", "Seneca"); typeIn(g, gf(), "tags", "stoic"); await submitForm(g, gf());
+  reqBody = g.lastBody();
+  check("growth: saving posts space growth, the kind, text, source and tags", reqBody.space === "growth" && reqBody.kind === "quote" && reqBody.body === "Begin at once" && reqBody.title === "Seneca" && reqBody.tags === "stoic");
+  check("growth: the form stays open for the next entry", !!gf() && gf().querySelector("textarea").value === "" && g.t.w.document.activeElement.dataset.fk === "add-note:growth:body");
+
+  g = growthBoot(); await wait(60); await openTab(g, "growth");
+  tbtn(g, "growth", "Rulebook").click(); await wait(10);
+  const cards = () => [...pnl(g, "growth").querySelectorAll(".wk-note")];
+  check("growth: the rulebook numbers the rules in the order written", cards().length === 2 && /Rule 1/.test(cards()[0].textContent) && /Rule 2/.test(cards()[1].textContent));
+  check("growth: a rule's first line stands out and the reason is quieter", cards()[0].querySelector(".wk-note-rule").textContent === "Never reply angry" && /regret every hurried reply/.test(cards()[0].querySelector(".wk-note-body.muted").textContent));
+  tbtn(g, "growth", "+ Add a rule").click(); await wait(10);
+  const rf = () => pnl(g, "growth").querySelector('form[aria-label="Add to your journal"]');
+  check("growth: adding a rule starts as a Rule and explains the two-line format", rf().querySelector('[name="kind"]').value === "rule" && /The rule \(first line\), and why it matters/.test(rf().textContent));
+  typeIn(g, rf(), "body", "No phones at dinner\nPresence matters."); await submitForm(g, rf());
+  check("growth: the new rule posts as kind rule", g.lastBody().kind === "rule" && g.lastBody().space === "growth");
+  tbtn(g, "growth", "Done", rf()).click(); await wait(10);
+  tbtn(g, "growth", "Unpin", cards().find((c) => c.textContent.includes("Sleep on big decisions"))).click(); await wait(60);
+  check("growth: Unpin sends pinned:false", g.calls("PATCH", "/api/notebook/22").length === 1 && g.lastBody().pinned === false);
+  g = growthBoot({ data: { ...growthData(), notes: [], total: 0, counts: {}, tags: [], pick: null } }); await wait(60); await openTab(g, "growth");
+  check("growth: empty, it explains what 'For today' will become and how to add by chat", /one of them will be shown here each day/.test(ptext(g, "growth")) && /save this lesson/.test(ptext(g, "growth")));
+  tbtn(g, "growth", "Rulebook").click(); await wait(10);
+  check("growth: an empty rulebook says what makes a good first rule", /No rules yet/.test(ptext(g, "growth")));
+
+  g = growthBoot(); await wait(60); await openTab(g, "growth");
+  for (const section of ["Journal", "Rulebook"]) {
+    tbtn(g, "growth", section).click(); await wait(10);
+    tbtn(g, "growth", section === "Journal" ? "+ Add to journal" : "+ Add a rule").click(); await wait(10);
+    const unnamedG = [...pnl(g, "growth").querySelectorAll("button")].filter((b) => !(b.textContent.trim() || b.getAttribute("aria-label")));
+    const unlabelledG = [...pnl(g, "growth").querySelectorAll("input, select, textarea")].filter((i) => !(i.closest("label") || i.getAttribute("aria-label")));
+    check(`growth: ${section} has no unnamed buttons and no unlabelled fields`, unnamedG.length === 0 && unlabelledG.length === 0, `${unnamedG.length}/${unlabelledG.length}`);
+  }
+  check("work/growth: none of the new scripts uses innerHTML-style injection or inline handlers", ["panel-kit.js", "work.js", "growth.js"].every((f) => !/innerHTML|insertAdjacentHTML|outerHTML|onclick=/.test(fs.readFileSync(ROOT + f, "utf8"))));
+
+
+  // ═══════════════ Loading feedback for every request, and long EMI lists ═══════════════
+  const later = (ms, value) => new Promise((res) => setTimeout(() => res(value), ms));
+  function busyBoot(timing = {}) {
+    const routes = m0Routes({
+      "GET /api/slow": () => later(300, { ok: true }), "POST /api/slow": () => later(300, { ok: true }), "PATCH /api/slow": () => later(300, { ok: true }),
+      "DELETE /api/slow": () => later(300, { ok: true }), "GET /api/long": () => later(700, { ok: true }), "POST /api/glacial": () => later(1800, { ok: true }), "GET /api/fast": () => ({ ok: true }), "POST /api/fast": () => ({ ok: true }),
+      "GET /api/broken": () => later(100, { status: 500, body: {} }), "GET /api/notifications": () => later(300, { notifications: [] }),
+    });
+    const t = boot({ drawer: true, routes }); authed(t);
+    Object.assign(t.w.TapanHost.netTiming, { showWrite: 20, showRead: 20, counting: 3, slow: 8 }, timing);
+    const el = (id) => t.$(id);
+    return { t, call: (method, path) => t.w.TapanHost.api(path, { method }), pill: () => el("busy"), bar: () => el("busy-bar"), text: () => el("busy-text").textContent, sr: () => el("busy-sr").textContent,
+      shown: () => !el("busy").classList.contains("hidden") && !el("busy-bar").classList.contains("hidden") && t.w.document.body.classList.contains("is-busy") };
+  }
+  let bz = busyBoot(); await wait(60);
+  check("busy: the page has a status pill, a progress bar and a polite live region for screen readers, all hidden at rest", !!bz.pill() && !!bz.bar() && bz.pill().classList.contains("hidden") && bz.bar().classList.contains("hidden") && bz.t.$("busy-sr").getAttribute("role") === "status" && bz.t.$("busy-sr").getAttribute("aria-live") === "polite");
+  check("busy: the pill and bar are decoration for sighted users (hidden from the accessibility tree; the live region speaks instead)", bz.pill().getAttribute("aria-hidden") === "true" && bz.bar().getAttribute("aria-hidden") === "true");
+  let pending1 = bz.call("POST", "/api/slow"); await wait(60);
+  check("busy: a slow save shows 'Saving…' on the pill with the bar running", bz.shown() && bz.text() === "Saving…");
+  check("busy: ...and tells screen readers once, in words", bz.sr() === "Saving…");
+  await pending1; await wait(30);
+  check("busy: ...and everything disappears when the answer arrives", !bz.shown() && bz.sr() === "");
+  pending1 = bz.call("GET", "/api/slow"); await wait(60);
+  check("busy: a slow read says 'Loading…'", bz.shown() && bz.text() === "Loading…");
+  await pending1; await wait(30);
+  pending1 = bz.call("DELETE", "/api/slow"); await wait(60);
+  check("busy: a delete says 'Deleting…'", bz.text() === "Deleting…");
+  await pending1; await wait(30);
+  pending1 = bz.call("PATCH", "/api/slow"); await wait(60);
+  check("busy: an edit says 'Saving…'", bz.text() === "Saving…");
+  await pending1; await wait(30);
+  bz = busyBoot({ showWrite: 150, showRead: 700 }); await wait(60);
+  await bz.call("POST", "/api/fast"); await wait(10);
+  const quickSeen = bz.shown();
+  await bz.call("GET", "/api/fast"); await wait(10);
+  check("busy: an answer that arrives quickly never flashes the pill", !quickSeen && !bz.shown());
+  bz = busyBoot(); await wait(60);
+  const a1 = bz.call("POST", "/api/slow"), a2 = bz.call("GET", "/api/long"); await wait(60);
+  check("busy: several requests at once share one pill", bz.shown() && bz.t.w.document.querySelectorAll("#busy").length === 1);
+  await a1; await wait(40);
+  check("busy: ...which stays after the first one finishes, because the second is still running", bz.shown());
+  await a2; await wait(30);
+  check("busy: ...and goes when the last one finishes", !bz.shown());
+  bz = busyBoot(); await wait(60);
+  bz.t.w.fetch = async () => { await later(120, null); return { ok: false, status: 500, json: async () => ({}) }; };         // slow, then a server error
+  let failed = null; const badCall = bz.call("GET", "/api/broken").catch((e) => { failed = e; }); await wait(60);
+  check("busy: a request that is slow and then fails still shows progress", bz.shown());
+  await badCall; await wait(20);
+  check("busy: ...and clears when it fails, so a failure never leaves the screen 'busy' forever", failed && failed.status === 500 && !bz.shown());
+  bz = busyBoot(); await wait(60);
+  const poll = bz.t.w.TapanHost.api("/api/notifications?after=0"); await wait(80);
+  check("busy: background polling is never announced", !bz.shown() && bz.sr() === "");
+  await poll;
+  bz = busyBoot({ counting: 0, slow: 1 }); await wait(60);
+  const slowOne = bz.call("POST", "/api/glacial");
+  await wait(1250);
+  check("busy: after a while it says the server is slow, not just a spinner", /Still working… the server is slow right now/.test(bz.text()));
+  check("busy: ...and screen readers are told once about the delay", bz.sr() === "Still working. The server is slow right now.");
+  await slowOne;
+  bz = busyBoot({ counting: 0, slow: 60 }); await wait(60);
+  const counted = bz.call("POST", "/api/glacial"); await wait(1150);
+  check("busy: a slow request counts the seconds so it is clear it has not frozen", /Saving… [01]s/.test(bz.text()));
+  await counted;
+  m = moneyBootV2(); m.state.delay = 250; await wait(60);
+  m.t.w.TapanHost.netTiming.showWrite = 20;
+  await openMoney(m, "Payments"); openPayCard(m);
+  [...m.t.$("panel-money").querySelectorAll(".mn-emi input[type=checkbox]")][0].click(); await wait(80);
+  check("busy: ticking an EMI on the Money screen shows 'Saving…' while it is saved, and the primary buttons are dimmed", !m.t.$("busy").classList.contains("hidden") && m.t.$("busy-text").textContent === "Saving…" && m.t.$("panel-money").getAttribute("aria-busy") === "true");
+  await wait(400);
+  check("busy: ...and it is all gone afterwards", m.t.$("busy").classList.contains("hidden") && !m.t.$("panel-money").hasAttribute("aria-busy"));
+  m = moneyBootV2(); m.state.delay = 80; await wait(60); await openMoney(m, "Payments"); openPayCard(m);
+  m.state.reloadDelay = 400; m.t.w.TapanHost.netTiming.showWrite = 20;
+  [...m.t.$("panel-money").querySelectorAll(".mn-emi input[type=checkbox]")][0].click(); await wait(250);
+  check("busy: the pill stays up while the screen is refreshed after a save (the save has landed, the numbers have not changed yet)", !m.t.$("busy").classList.contains("hidden") && m.calls("PATCH", "/api/expenses/emis/").length === 1 && m.t.$("panel-money").getAttribute("aria-busy") === "true");
+  await wait(600);
+  check("busy: ...and goes only once the refreshed screen is there", m.t.$("busy").classList.contains("hidden") && [...m.t.$("panel-money").querySelectorAll(".mn-emi input[type=checkbox]")][0].checked === true);
+
+
+  // long EMI lists scroll inside their card
+  const longPay = (n) => v2Pay({ emi_count: n, paid_count: 3, emis: Array.from({ length: n }, (_, i) => mkEmi(500 + i, i + 1, 100000, `2027-${String((i % 12) + 1).padStart(2, "0")}-05`, i < 3 ? "paid" : "upcoming", { custom: false })) });
+  m = moneyBootV2({ pays: [longPay(24)] }); await wait(60); await openMoney(m, "Payments"); openPayCard(m);
+  const box = () => m.t.$("panel-money").querySelector(".scroll-box");
+  check("scroll: a 24-EMI loan's list sits in a scroll region", !!box() && box().querySelectorAll(".mn-emi").length === 24);
+  check("scroll: ...that the keyboard can reach and screen readers can name", box().tabIndex === 0 && box().getAttribute("role") === "region" && box().getAttribute("aria-label") === "EMIs of Car loan");
+  check("scroll: ...and the list inside is still a real list (the region role is on the box, not the <ul>, so list semantics survive)", box().firstElementChild.tagName === "UL" && !box().firstElementChild.hasAttribute("role"));
+  check("scroll: ...with a line saying how many there are and where it opens", /24 EMIs\. Scroll inside the list; it opens at the next one to pay\./.test(ptext(m, "money")));
+  m = moneyBootV2({ pays: [longPay(6)] }); await wait(60); await openMoney(m, "Payments"); openPayCard(m);
+  check("scroll: a short list (6 or fewer) is left alone", !box() && !/Scroll inside the list/.test(ptext(m, "money")) && m.t.$("panel-money").querySelectorAll(".mn-emis").length === 1);
+  m = moneyBootV2({ pays: [longPay(24)] }); await wait(60); await openMoney(m, "Payments"); openPayCard(m);
+  tbtn(m, "money", "Mark several paid").click(); await wait(10);
+  const bulkBox = m.t.$("panel-money").querySelector('[role="group"][aria-label^="Mark several EMIs"] .scroll-box');
+  check("scroll: the 'mark several' list scrolls too, so its buttons stay in reach", !!bulkBox && bulkBox.getAttribute("aria-label") === "Unpaid EMIs of Car loan" && bulkBox.querySelectorAll("li").length === 21);
+  check("scroll: the scrolling regions' accessible names do not collide with each other", new Set([...m.t.$("panel-money").querySelectorAll(".scroll-box")].map((u) => u.getAttribute("aria-label"))).size === 2);
 
   console.log(failures ? `\n${failures} FAILED` : "\nALL UI TESTS PASSED");
   process.exit(failures ? 1 : 0);

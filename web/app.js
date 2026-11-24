@@ -76,7 +76,7 @@ function bindDom() {
         pill: $('conn-pill'), statusText: document.querySelector('.status-text'),
         jump: $('jump-btn'), jumpLabel: $('jump-label'), toast: $('toast'), scrim: $('scrim'),
         side: $('side-panel'), sideClose: $('side-close'), panelToday: $('panel-today'), panelHistory: $('panel-history'),
-        panelSettings: $('panel-settings'), panelMoney: $('panel-money'), tabToday: $('tab-today'), tabHistory: $('tab-history'), tabMoney: $('tab-money'), tabSettings: $('tab-settings'),
+        panelSettings: $('panel-settings'), panelMoney: $('panel-money'), panelWork: $('panel-work'), panelGrowth: $('panel-growth'), tabToday: $('tab-today'), tabHistory: $('tab-history'), tabMoney: $('tab-money'), tabWork: $('tab-work'), tabGrowth: $('tab-growth'), tabSettings: $('tab-settings'),
         updateBanner: $('update-banner'), updateReload: $('update-reload'),
         todayBtn: $('today-btn'), historyBtn: $('history-btn'), newBtn: $('new-chat-btn'), lockBtn: $('lock-btn'),
         voiceModeBtn: $('voice-mode-btn'), voiceModeLabel: $('voice-mode-label'), stopBtn: $('stop-speech-btn'),
@@ -144,16 +144,66 @@ function rejectToken() {
 }
 
 // ── REST helper (adds the token, reacts to 401) ───────────────────
+// ── Loading feedback ──────────────────────────────────────────────
+// Every request made through api() shows that something is happening: a bar across the top and a small status pill ("Saving…",
+// "Loading…", "Deleting…") that appears if the answer takes more than a moment, counts the seconds, and admits when it is slow.
+// Background polling is not announced. Screen readers hear one short message when it starts and one if it is slow, not a ticking clock.
+const NET = { showWrite: 150, showRead: 700, counting: 3, slow: 8 };      // ms / s thresholds (tests shorten them)
+const netState = { active: [], showTimer: null, ticker: null, started: 0, spoke: false, slowSpoken: false };
+const QUIET_REQUESTS = /^\/api\/(notifications|briefing|client-report|push\/key)/;
+function netText() {
+    const secs = Math.floor((Date.now() - netState.started) / 1000);
+    const last = netState.active[netState.active.length - 1];
+    if (secs >= NET.slow) return 'Still working… the server is slow right now';
+    return last ? last.label + (secs >= NET.counting ? ` ${secs}s` : '') : '';
+}
+function netPaint() {
+    const text = netText();
+    const pill = document.getElementById('busy-text');
+    if (pill) pill.textContent = text;
+    const sr = document.getElementById('busy-sr');
+    if (sr) {
+        const secs = Math.floor((Date.now() - netState.started) / 1000);
+        if (!netState.spoke) { sr.textContent = netState.active.length ? netState.active[netState.active.length - 1].label : ''; netState.spoke = true; }
+        else if (secs >= NET.slow && !netState.slowSpoken) { sr.textContent = 'Still working. The server is slow right now.'; netState.slowSpoken = true; }
+    }
+}
+function netShow(visible) {
+    ['busy', 'busy-bar'].forEach((id) => { const el = document.getElementById(id); if (el) el.classList.toggle('hidden', !visible); });
+    document.body.classList.toggle('is-busy', visible);
+}
+function netStart(op) {
+    netState.active.push(op);
+    if (netState.active.length > 1) return;
+    netState.started = Date.now(); netState.spoke = false; netState.slowSpoken = false;
+    netState.showTimer = setTimeout(() => { netShow(true); netPaint(); netState.ticker = setInterval(netPaint, 1000); }, op.delay);
+}
+function netStop(op) {
+    netState.active = netState.active.filter((o) => o !== op);
+    if (netState.active.length) return;
+    clearTimeout(netState.showTimer); clearInterval(netState.ticker);
+    netShow(false);
+    const sr = document.getElementById('busy-sr');
+    if (sr) sr.textContent = '';
+}
+
 async function api(path, options = {}) {
     const headers = Object.assign({}, options.headers || {});
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
-    const res = await fetch(path, Object.assign({}, options, { headers }));
-    if (res.status === 401) {
-        if (!state.authNeeded) rejectToken();
-        throw new Error('unauthorized');
+    const method = String(options.method || 'GET').toUpperCase();
+    const op = QUIET_REQUESTS.test(path) ? null : { label: method === 'GET' ? 'Loading…' : method === 'DELETE' ? 'Deleting…' : 'Saving…', delay: method === 'GET' ? NET.showRead : NET.showWrite };
+    if (op) netStart(op);
+    try {
+        const res = await fetch(path, Object.assign({}, options, { headers }));
+        if (res.status === 401) {
+            if (!state.authNeeded) rejectToken();
+            throw new Error('unauthorized');
+        }
+        if (!res.ok) { const err = new Error(`HTTP ${res.status}`); err.status = res.status; err.response = res; throw err; }
+        return await res.json();
+    } finally {
+        if (op) netStop(op);
     }
-    if (!res.ok) { const err = new Error(`HTTP ${res.status}`); err.status = res.status; err.response = res; throw err; }
-    return res.json();
 }
 
 // ── Connection ────────────────────────────────────────────────────
@@ -721,14 +771,17 @@ async function refreshToday(silent) {
 // ── Side panel / drawer ───────────────────────────────────────────
 function setTab(tab) {
     state.tab = tab;
-    [['today', dom.tabToday, dom.panelToday], ['history', dom.tabHistory, dom.panelHistory], ['money', dom.tabMoney, dom.panelMoney], ['settings', dom.tabSettings, dom.panelSettings]].forEach(([name, tabEl, panelEl]) => {
+    [['today', dom.tabToday, dom.panelToday], ['history', dom.tabHistory, dom.panelHistory], ['money', dom.tabMoney, dom.panelMoney], ['work', dom.tabWork, dom.panelWork],
+        ['growth', dom.tabGrowth, dom.panelGrowth], ['settings', dom.tabSettings, dom.panelSettings]].forEach(([name, tabEl, panelEl]) => {
         tabEl.setAttribute('aria-selected', String(tab === name));
         tabEl.tabIndex = tab === name ? 0 : -1;
         panelEl.classList.toggle('hidden', tab !== name);
+        if (tab === name && tabEl.scrollIntoView) tabEl.scrollIntoView({ inline: 'nearest', block: 'nearest' });     // six tabs scroll sideways on a narrow phone: keep this one in view
     });
+    const screens = { money: ['TapanMoney', dom.panelMoney, 'Money'], work: ['TapanWork', dom.panelWork, 'Work'], growth: ['TapanGrowth', dom.panelGrowth, 'Growth'] };
     if (tab === 'today') refreshToday(true);
     else if (tab === 'history') loadConversations();
-    else if (tab === 'money') { if (window.TapanMoney) window.TapanMoney.render(dom.panelMoney); else dom.panelMoney.textContent = 'The Money tab could not load. Reload the page.'; }
+    else if (screens[tab]) { const [mod, panel, label] = screens[tab]; if (window[mod]) window[mod].render(panel); else panel.textContent = `The ${label} tab could not load. Reload the page.`; }
     else if (window.TapanSettings) window.TapanSettings.render(dom.panelSettings);
 }
 
@@ -1427,7 +1480,7 @@ function bindEvents() {
     if (drawerQuery.addEventListener) drawerQuery.addEventListener('change', syncDrawerA11y);
 
     // tab list: arrow keys move between tabs (WAI-ARIA tabs pattern)
-    const tabs = [dom.tabToday, dom.tabHistory, dom.tabMoney, dom.tabSettings];
+    const tabs = [dom.tabToday, dom.tabHistory, dom.tabMoney, dom.tabWork, dom.tabGrowth, dom.tabSettings];
     tabs.forEach((tab) => tab.addEventListener('keydown', (e) => {
         const i = tabs.indexOf(tab);
         let next = null;
@@ -1445,6 +1498,8 @@ function bindEvents() {
     dom.tabToday.addEventListener('click', () => setTab('today'));
     dom.tabHistory.addEventListener('click', () => setTab('history'));
     dom.tabMoney.addEventListener('click', () => setTab('money'));
+    dom.tabWork.addEventListener('click', () => setTab('work'));
+    dom.tabGrowth.addEventListener('click', () => setTab('growth'));
     dom.tabSettings.addEventListener('click', () => setTab('settings'));
     dom.sideClose.addEventListener('click', () => closePanel());
     dom.updateReload.addEventListener('click', reloadForUpdate);
@@ -1523,7 +1578,7 @@ function init() {
 }
 
 window.TapanApp = { state, dom, push };
-window.TapanHost = { reload: () => window.location.reload(), api, toast, announce, h, store, state, push, deviceId, webVersion: WEB_VERSION, isStandalone, copyText, checkForUpdate, sendClientReport, closePanel: () => closePanel() };   // read-only handle for tests and debugging in the console
+window.TapanHost = { reload: () => window.location.reload(), api, netTiming: NET, busyStart: (label) => { const op = { label, delay: NET.showWrite }; netStart(op); return op; }, busyEnd: (op) => netStop(op), toast, announce, h, store, state, push, deviceId, webVersion: WEB_VERSION, isStandalone, copyText, checkForUpdate, sendClientReport, closePanel: () => closePanel() };   // read-only handle for tests and debugging in the console
 
 if (!window.__TAPAN_NO_AUTOINIT) {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

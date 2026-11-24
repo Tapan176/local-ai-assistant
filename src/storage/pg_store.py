@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import sys
+import time
 from decimal import Decimal
 from typing import Any
 
@@ -104,7 +106,8 @@ _TABLES = {
     "tasks": """
         id BIGSERIAL PRIMARY KEY, title TEXT NOT NULL, due_at TEXT, priority TEXT NOT NULL DEFAULT 'normal',
         status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, completed_at TEXT,
-        project TEXT NOT NULL DEFAULT '', details TEXT NOT NULL DEFAULT '', reminder_id BIGINT""",
+        project TEXT NOT NULL DEFAULT '', details TEXT NOT NULL DEFAULT '', reminder_id BIGINT,
+        remind TEXT NOT NULL DEFAULT ''""",
     "memories": """
         id BIGSERIAL PRIMARY KEY, content TEXT NOT NULL, category TEXT NOT NULL DEFAULT 'general',
         created_at TEXT NOT NULL""",
@@ -131,6 +134,7 @@ _MIGRATIONS = (
     ("tasks", "project", "TEXT NOT NULL DEFAULT ''"),
     ("tasks", "details", "TEXT NOT NULL DEFAULT ''"),
     ("tasks", "reminder_id", "BIGINT"),
+    ("tasks", "remind", "TEXT NOT NULL DEFAULT ''"),
 )
 
 _INDEXES = (
@@ -211,7 +215,17 @@ class PostgresStore:
 
     dialect = "postgres"
 
-    def __init__(self, dsn: str, min_size: int = 1, max_size: int = 4) -> None:
+    # Why this class is careful about round trips: the database is usually in another region from the server, so every statement
+    # costs a network hop (about 60 ms between Singapore and Mumbai). Three things keep a request to a handful of hops:
+    #   * a transaction is sent as *one multi-statement script* (values bound client-side by psycopg's own escaping), which the server
+    #     runs atomically: N statements cost one hop instead of N + 2. Measured at 200 ms per hop: 20 inserts take 4.8 s as a plain
+    #     transaction, 0.9 s in pipeline mode and 0.2 s as one script;
+    #   * the pool's liveness check (an extra hop per checkout) is skipped for a connection that was used a moment ago;
+    #   * a few connections are kept open, so a burst of parallel reads does not pay for new TLS handshakes.
+    FRESH_SECONDS = 10.0
+    BATCH = os.getenv("TAPAN_PG_BATCH", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+    def __init__(self, dsn: str, min_size: int = 2, max_size: int = 6) -> None:
         self.dsn = _with_ssl(dsn)
         self.db_path = "postgres"  # SQLiteStore compatibility (shown in diagnostics only)
         self._min, self._max = min_size, max_size
@@ -238,7 +252,7 @@ class PostgresStore:
                 min_size=self._min,
                 max_size=self._max,
                 open=False,
-                check=AsyncConnectionPool.check_connection,  # drop connections the pooler closed while idle
+                check=self._check,                            # drop connections the pooler closed while idle
                 max_idle=240,
                 kwargs={"autocommit": True, "row_factory": dict_row, "prepare_threshold": None},  # pgbouncer-safe
             )
@@ -246,15 +260,46 @@ class PostgresStore:
             self._pool_loop = loop
         return self._pool
 
+    @classmethod
+    async def _check(cls, conn: Any) -> None:
+        """The pool's liveness check, skipped when the connection answered a query in the last few seconds."""
+        if time.monotonic() - getattr(conn, "_tapan_used", 0.0) < cls.FRESH_SECONDS:
+            return
+        await AsyncConnectionPool.check_connection(conn)
+
+    @staticmethod
+    def _touch(conn: Any) -> None:
+        try:
+            conn._tapan_used = time.monotonic()
+        except AttributeError:  # a connection type that does not allow attributes: the check simply always runs
+            pass
+
     # ── SQLiteStore interface ───────────────────────────────────────
     async def execute(self, sql: str, params: tuple[Any, ...] = ()) -> int:
         query, returning = translate_sql(sql)
         pool = await self._get_pool()
         async with pool.connection() as conn:
             cur = await conn.execute(query, tuple(params))
-            return await self._new_id(cur) if returning else 0
+            result = await self._new_id(cur) if returning else 0
+            self._touch(conn)
+            return result
 
     async def execute_transaction(self, operations: list[tuple[str, tuple[Any, ...]]]) -> list[int]:
+        if not operations:
+            return []
+        if len(operations) == 1:                              # one statement is already atomic: no BEGIN/COMMIT hops around it
+            return [await self.execute(*operations[0])]
+        if self.BATCH:
+            try:
+                return await self._transaction_script(operations)
+            except (psycopg.errors.FeatureNotSupported, psycopg.errors.ProtocolViolation):
+                # The server or pooler refused the script outright, so nothing ran: fall back for good and say so once.
+                type(self).BATCH = False
+                logger.warning("Postgres refused a batched transaction; running transactions statement by statement from now on")
+        return await self._transaction_plain(operations)
+
+    async def _transaction_plain(self, operations: list[tuple[str, tuple[Any, ...]]]) -> list[int]:
+        """One network hop per statement (plus BEGIN and COMMIT). Kept as the fallback behind TAPAN_PG_BATCH=0."""
         pool = await self._get_pool()
         ids: list[int] = []
         async with pool.connection() as conn:
@@ -263,22 +308,53 @@ class PostgresStore:
                     query, returning = translate_sql(sql)
                     cur = await conn.execute(query, tuple(params))
                     ids.append(await self._new_id(cur) if returning else 0)
+            self._touch(conn)
         return ids
+
+    async def _transaction_script(self, operations: list[tuple[str, tuple[Any, ...]]]) -> list[int]:
+        """Every statement in one message. A multi-statement simple query is a single implicit transaction on the server: all of it
+        happens or none of it does. Values are bound by psycopg's client-side cursor, which quotes them exactly as libpq would."""
+        pool = await self._get_pool()
+        translated = [translate_sql(sql) for sql, _ in operations]
+        async with pool.connection() as conn:
+            cur = psycopg.AsyncClientCursor(conn)
+            script = "; ".join(cur.mogrify(query, tuple(params)) for (query, _), (_, params) in zip(translated, operations))
+            await cur.execute(script)
+            ids: list[int] = []
+            for index, (_, returning) in enumerate(translated):
+                row = await cur.fetchone() if returning and cur.description else None
+                try:
+                    ids.append(int(row["id"]) if row else 0)
+                except (TypeError, ValueError):               # tables keyed by TEXT id (semantic_documents)
+                    ids.append(0)
+                if index < len(translated) - 1:
+                    cur.nextset()
+            self._touch(conn)
+        return ids
+
+    async def _read(self, query: str, params: tuple[Any, ...], one: bool) -> Any:
+        """A read is safe to repeat, so a connection the pooler dropped behind our back costs one retry, not an error."""
+        for attempt in (0, 1):
+            pool = await self._get_pool()
+            try:
+                async with pool.connection() as conn:
+                    cur = await conn.execute(query, tuple(params))
+                    out = await cur.fetchone() if one else await cur.fetchall()
+                    self._touch(conn)
+                    return out
+            except psycopg.OperationalError:
+                if attempt:
+                    raise
+        return None  # pragma: no cover
 
     async def fetchone(self, sql: str, params: tuple[Any, ...] = ()) -> dict[str, Any] | None:
         query, _ = translate_sql(sql)
-        pool = await self._get_pool()
-        async with pool.connection() as conn:
-            cur = await conn.execute(query, tuple(params))
-            row = await cur.fetchone()
-            return _clean(row) if row else None
+        row = await self._read(query, params, True)
+        return _clean(row) if row else None
 
     async def fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
         query, _ = translate_sql(sql)
-        pool = await self._get_pool()
-        async with pool.connection() as conn:
-            cur = await conn.execute(query, tuple(params))
-            return [_clean(r) for r in await cur.fetchall()]
+        return [_clean(r) for r in await self._read(query, params, False)]
 
     @staticmethod
     async def _new_id(cur: Any) -> int:

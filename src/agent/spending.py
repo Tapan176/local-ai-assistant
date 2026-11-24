@@ -21,7 +21,7 @@ from typing import Any
 from src.agent import timeutil
 from src.agent.expenses import (
     ExpenseError, NotFound, _UNSET, _csv_cell, _now_iso, _remind_days, _require_bank_id, _today, _when_phrase,
-    clean_text, emi_date, money, month_offset, parse_date, to_minor,
+    clean_text, emi_date, money, month_offset, parse_date, reminder_ops, to_minor,
 )
 from src.config.settings import Settings
 
@@ -89,7 +89,7 @@ async def add_spend(store: Any, settings: Settings, *, amount: Any, spent_on: An
         "INSERT INTO ex_spend (spent_on, amount_minor, category, note, sub_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
         (day.isoformat(), minor, cat, text, sub_id, _now_iso()),
     )
-    return await _spend_one(store, new_id)
+    return {"id": new_id, "spent_on": day.isoformat(), "amount_minor": minor, "category": cat, "note": text, "sub_id": sub_id}    # what was just written: no second read
 
 
 async def _spend_one(store: Any, spend_id: int) -> dict[str, Any]:
@@ -152,20 +152,20 @@ async def month_summary(store: Any, settings: Settings, month: Any = None) -> di
     today = _today(settings)
     key, start, end = month_range(month, today)
     s, e = start.isoformat(), end.isoformat()
-    by_cat = await store.fetchall(
-        "SELECT category, SUM(amount_minor) AS t, COUNT(*) AS n FROM ex_spend WHERE spent_on >= ? AND spent_on < ? GROUP BY category", (s, e))
-    by_day = await store.fetchall(
-        "SELECT spent_on, SUM(amount_minor) AS t FROM ex_spend WHERE spent_on >= ? AND spent_on < ? GROUP BY spent_on ORDER BY spent_on", (s, e))
-    top = await store.fetchall(
-        "SELECT * FROM ex_spend WHERE spent_on >= ? AND spent_on < ? ORDER BY amount_minor DESC, id DESC LIMIT 5", (s, e))
+    prev_start, prev_end = _prev_month(start)
+    # five independent reads, side by side: one network round trip instead of five
+    by_cat, by_day, top, prev_total, budget = await asyncio.gather(
+        store.fetchall("SELECT category, SUM(amount_minor) AS t, COUNT(*) AS n FROM ex_spend WHERE spent_on >= ? AND spent_on < ? GROUP BY category", (s, e)),
+        store.fetchall("SELECT spent_on, SUM(amount_minor) AS t FROM ex_spend WHERE spent_on >= ? AND spent_on < ? GROUP BY spent_on ORDER BY spent_on", (s, e)),
+        store.fetchall("SELECT * FROM ex_spend WHERE spent_on >= ? AND spent_on < ? ORDER BY amount_minor DESC, id DESC LIMIT 5", (s, e)),
+        _total(store, prev_start, prev_end),
+        get_budget(store),
+    )
     total = sum(int(r["t"]) for r in by_cat)
     count = sum(int(r["n"]) for r in by_cat)
-    prev_start, prev_end = _prev_month(start)
-    prev_total = await _total(store, prev_start, prev_end)
     days_in_month = (end - start).days
     current = start <= today < end
     elapsed = (today - start).days + 1 if current else (days_in_month if today >= end else 0)
-    budget = await get_budget(store)
     categories = sorted(({"category": r["category"], "amount_minor": int(r["t"]), "count": int(r["n"]),
                           "share": round(int(r["t"]) * 100 / total) if total else 0} for r in by_cat), key=lambda c: -c["amount_minor"])
     return {
@@ -260,16 +260,9 @@ async def sync_sub_reminder(store: Any, settings: Settings, sub_id: int) -> None
             title = f"Subscription · {sub['name']} · {money(int(sub['amount_minor']), settings.currency)} renews {_when_phrase(int(sub['remind_days']))}"
             want = (fire.isoformat(), title[:200])
     current = await store.fetchone("SELECT id, title, due_at, status FROM reminders WHERE id = ?", (sub["reminder_id"],)) if sub["reminder_id"] else None
-    if current and want and current["status"] == "pending" and current["due_at"] == want[0] and current["title"] == want[1]:
-        return
-    if current and current["status"] == "pending":
-        await store.execute("UPDATE reminders SET status = 'cancelled' WHERE id = ? AND status = 'pending'", (current["id"],))
-    new_id = None
-    if want:
-        new_id = await store.execute(
-            "INSERT INTO reminders (session_id, title, due_at, status, created_at) VALUES ('expenses', ?, ?, 'pending', ?)", (want[1], want[0], _now_iso()))
-    if new_id != sub["reminder_id"]:
-        await store.execute("UPDATE ex_subs SET reminder_id = ? WHERE id = ?", (new_id, sub_id))
+    ops = reminder_ops("ex_subs", sub_id, current, want, "expenses", bool(sub["reminder_id"]))
+    if ops:
+        await store.execute_transaction(ops)
 
 
 async def create_sub(store: Any, settings: Settings, *, name: Any, amount: Any, cycle: Any = "monthly", next_date: Any = None,
@@ -367,8 +360,8 @@ def _spend_category_for(sub_category: str) -> str:
 # ── cards and rules for the overview ───────────────────────────────────
 async def card(store: Any, settings: Settings) -> dict[str, Any]:
     """The small summary the Money overview shows: this month's spending and what subscriptions cost."""
-    month = await month_summary(store, settings)
-    subs = (await list_subs(store, settings))["summary"]
+    month, listing = await asyncio.gather(month_summary(store, settings), list_subs(store, settings))
+    subs = listing["summary"]
     return {"month": month["month"], "spent_minor": month["total_minor"], "previous_minor": month["previous_total_minor"],
             "projected_minor": month["projected_minor"], "budget_minor": month["budget_minor"], "budget_left_minor": month["budget_left_minor"],
             "subs_monthly_minor": subs["monthly_minor"], "subs_yearly_minor": subs["yearly_minor"], "subs_active": subs["active"], "subs_due_7": subs["due_7"]["count"]}

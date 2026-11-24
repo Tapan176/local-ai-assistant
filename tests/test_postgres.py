@@ -419,7 +419,7 @@ async def test_upgrading_an_existing_database_keeps_every_payment_exactly_as_it_
         conn.execute("ALTER TABLE ex_payments DROP COLUMN kind, DROP COLUMN grp, DROP COLUMN settled_at, DROP COLUMN open_paid_minor")
         conn.execute("ALTER TABLE ex_emis DROP COLUMN amount_custom")
         conn.execute("ALTER TABLE notes DROP COLUMN space, DROP COLUMN kind, DROP COLUMN pinned")
-        conn.execute("ALTER TABLE tasks DROP COLUMN project, DROP COLUMN details, DROP COLUMN reminder_id")
+        conn.execute("ALTER TABLE tasks DROP COLUMN project, DROP COLUMN details, DROP COLUMN reminder_id, DROP COLUMN remind")
         conn.execute("DROP TABLE ex_spend, ex_subs")
         pay_cols = {r[0] for r in conn.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'ex_payments'")}
     assert "kind" not in pay_cols
@@ -493,3 +493,190 @@ async def test_new_expense_tables_have_row_level_security(pg):
     for table in ("ex_spend", "ex_subs"):
         row = await pg.fetchone("SELECT relrowsecurity FROM pg_class WHERE relname = ?", (table,))
         assert row and row["relrowsecurity"] is True, table
+
+
+async def test_work_and_growth_on_postgres(pg, settings):
+    from datetime import timedelta
+
+    from src.agent import workspace
+
+    due = (timeutil.now(settings) + timedelta(days=5)).date().isoformat()
+    t = await workspace.create_task(pg, settings, title="Hit 100% of target", project="Sales", priority="high", due=due, remind="morning")
+    await workspace.create_task(pg, settings, title="snake_case rename", project="Code")
+    assert [x["title"] for x in await workspace.list_tasks(pg, settings, q="100%")] == ["Hit 100% of target"]        # ESCAPE works the same in Postgres
+    assert [x["title"] for x in await workspace.list_tasks(pg, settings, q="_")] == ["snake_case rename"]
+    assert [x["title"] for x in await workspace.list_tasks(pg, settings)][0] == "Hit 100% of target"                 # high priority first, undated last
+    live = await pg.fetchall("SELECT title FROM reminders WHERE session_id = 'work' AND status = 'pending'")
+    assert [r["title"] for r in live] == ["Task · Hit 100% of target · Sales"]
+    await workspace.set_task_done(pg, settings, t["id"], True)
+    assert (await pg.fetchone("SELECT COUNT(*) AS n FROM reminders WHERE session_id = 'work' AND status = 'pending'"))["n"] == 0
+    ov = await workspace.work_overview(pg, settings)
+    assert ov["open"] == 1 and ov["done_7d"] == 1 and isinstance(ov["open"], int)
+
+    r1 = await workspace.create_note(pg, space="growth", kind="rule", body="Never decide angry", tags="calm,sleep")
+    r2 = await workspace.create_note(pg, space="growth", kind="rule", body="Sleep on big decisions", tags="calm")
+    await workspace.create_note(pg, space="growth", kind="lesson", body="Ask early", tags="work")
+    assert [n["id"] for n in await workspace.list_notes(pg, "growth", "rule")] == [r1["id"], r2["id"]]
+    assert [n["id"] for n in await workspace.list_notes(pg, "growth", tag="calm")] == [r2["id"], r1["id"]]
+    assert await workspace.list_notes(pg, "growth", tag="cal") == []                                                  # whole-tag match via string concatenation
+    await workspace.update_note(pg, r2["id"], pinned=True)
+    assert (await workspace.list_notes(pg, "growth"))[0]["id"] == r2["id"] and (await workspace.todays_pick(pg, settings))["id"] == r2["id"]
+    ov = await workspace.growth_overview(pg, settings)
+    assert ov["total"] == 3 and ov["tags"][0] == {"tag": "calm", "count": 2}
+
+
+async def test_the_tasks_table_gained_its_new_columns_with_defaults(pg):
+    cols = {r["column_name"] for r in await pg.fetchall("SELECT column_name FROM information_schema.columns WHERE table_name = 'tasks'")}
+    assert {"project", "details", "reminder_id", "remind"} <= cols
+
+
+# ── Batched transactions: correctness, safety and speed ─────────────────
+async def test_a_batched_transaction_returns_the_new_ids_in_order(pg):
+    ids = await pg.execute_transaction([
+        ("INSERT INTO people (name, relationship, notes, updated_at) VALUES (?, ?, ?, ?)", ("A", "r", "", "t")),
+        ("UPDATE people SET notes = ? WHERE name = ?", ("changed", "A")),
+        ("INSERT INTO people (name, relationship, notes, updated_at) VALUES (?, ?, ?, ?)", ("B", "r", "", "t")),
+        ("DELETE FROM people WHERE name = ?", ("nobody",)),
+        ("INSERT INTO people (name, relationship, notes, updated_at) VALUES (?, ?, ?, ?)", ("C", "r", "", "t")),
+    ])
+    rows = {r["name"]: r["id"] for r in await pg.fetchall("SELECT id, name FROM people")}
+    assert ids == [rows["A"], 0, rows["B"], 0, rows["C"]] and ids[0] < ids[2] < ids[4]
+    assert (await pg.fetchone("SELECT notes FROM people WHERE name = 'A'"))["notes"] == "changed"
+    assert await pg.execute_transaction([]) == []
+    single = await pg.execute_transaction([("INSERT INTO people (name, relationship, notes, updated_at) VALUES (?, ?, ?, ?)", ("D", "r", "", "t"))])
+    assert single == [(await pg.fetchone("SELECT id FROM people WHERE name = 'D'"))["id"]]
+
+
+NASTY = ["", "plain", "it's", 'say "hi"', "back\\slash", "100%", "50% off %s %%", "line1\nline2\r\nline3", "tab\there", "ünïcödé ₹ 日本語 😀",
+         "'); DROP TABLE people; --", "\\'; DROP TABLE people; --", "$$ dollar $$", "semi;colon; and -- comment", "x" * 5000, "  spaces  "]
+
+
+async def test_batched_values_round_trip_exactly_and_cannot_inject_sql(pg):
+    ops = [("INSERT INTO people (name, relationship, notes, updated_at) VALUES (?, ?, ?, ?)", (f"n{i}", "r", value, "t")) for i, value in enumerate(NASTY)]
+    ops.append(("INSERT INTO ex_banks (name, balance_minor, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?)", ("Bank", 99_999_999_999, "n", "t", "t")))
+    ops.append(("INSERT INTO reminders (session_id, title, due_at, status, created_at) VALUES (?, ?, ?, 'pending', ?)", ("s", "undated", None, "t")))   # a NULL value
+    await pg.execute_transaction(ops)
+    stored = {r["name"]: r["notes"] for r in await pg.fetchall("SELECT name, notes FROM people")}
+    assert [stored[f"n{i}"] for i in range(len(NASTY))] == NASTY                      # byte for byte, including the injection attempts
+    assert (await pg.fetchone("SELECT COUNT(*) AS n FROM people"))["n"] == len(NASTY)  # the table still exists and nothing extra ran
+    assert (await pg.fetchone("SELECT balance_minor FROM ex_banks"))["balance_minor"] == 99_999_999_999          # big integers survive
+    assert (await pg.fetchone("SELECT due_at FROM reminders WHERE title = 'undated'"))["due_at"] is None         # and so does NULL
+
+
+async def test_a_failing_statement_rolls_the_whole_batch_back_and_the_pool_recovers(pg):
+    await pg.execute("INSERT INTO people (name, relationship, notes, updated_at) VALUES (?, ?, ?, ?)", ("dup", "r", "", "t"))
+    with pytest.raises(Exception):
+        await pg.execute_transaction([
+            ("INSERT INTO people (name, relationship, notes, updated_at) VALUES (?, ?, ?, ?)", ("first", "r", "", "t")),
+            ("INSERT INTO people (name, relationship, notes, updated_at) VALUES (?, ?, ?, ?)", ("dup", "r", "", "t")),       # violates UNIQUE(name)
+            ("INSERT INTO people (name, relationship, notes, updated_at) VALUES (?, ?, ?, ?)", ("third", "r", "", "t")),
+        ])
+    assert [r["name"] for r in await pg.fetchall("SELECT name FROM people ORDER BY name")] == ["dup"]               # nothing from the batch survived
+    assert await pg.execute("INSERT INTO people (name, relationship, notes, updated_at) VALUES (?, ?, ?, ?)", ("after", "r", "", "t"))
+    assert len(await asyncio.gather(*(pg.fetchone("SELECT 1 AS x") for _ in range(8)))) == 8                      # every pooled connection is still usable
+
+
+async def test_batched_and_statement_by_statement_transactions_end_in_the_same_state(pg, monkeypatch):
+    ops = [("INSERT INTO people (name, relationship, notes, updated_at) VALUES (?, ?, ?, ?)", (f"p{i}", "r", f"o'{i}", "t")) for i in range(12)]
+    ops += [("UPDATE people SET relationship = ? WHERE name = ?", ("changed", f"p{i}")) for i in range(0, 12, 3)]
+    await pg.execute_transaction(ops)
+    batched = await pg.fetchall("SELECT name, relationship, notes FROM people ORDER BY name")
+    await pg.execute("DELETE FROM people")
+    monkeypatch.setattr(PostgresStore, "BATCH", False)
+    await pg.execute_transaction(ops)
+    assert await pg.fetchall("SELECT name, relationship, notes FROM people ORDER BY name") == batched
+
+
+@pytest.fixture
+async def lagged(pg_dsn):
+    """A store whose every network hop costs 20 ms each way (40 ms round trip), like a database in another region."""
+    from tests.latency_proxy import LatencyProxy
+
+    direct = PostgresStore(pg_dsn)
+    await direct.initialize()
+    with psycopg.connect(pg_dsn, autocommit=True) as conn:
+        tables = [r[0] for r in conn.execute("SELECT tablename FROM pg_tables WHERE schemaname='public'")]
+        conn.execute("TRUNCATE " + ", ".join(tables) + " RESTART IDENTITY")
+    await direct.initialize()
+    async with LatencyProxy(pg_dsn, 0.02) as proxy:
+        store = PostgresStore(proxy.dsn)
+        for _ in range(3):                                                           # warm the pool, as a running server is
+            await asyncio.gather(*(store.fetchone("SELECT 1 AS x") for _ in range(4)))
+        store.rtt = proxy.rtt
+        yield store
+        await store.aclose()
+    await direct.aclose()
+
+
+async def test_a_batch_costs_about_one_round_trip_however_many_statements(lagged, monkeypatch):
+    import time as _t
+
+    ops = [("INSERT INTO people (name, relationship, notes, updated_at) VALUES (?, ?, ?, ?)", (f"x{i}", "r", "", "t")) for i in range(30)]
+    t0 = _t.perf_counter()
+    await lagged.execute_transaction(ops)
+    batched = _t.perf_counter() - t0
+    await lagged.execute("DELETE FROM people")
+    monkeypatch.setattr(PostgresStore, "BATCH", False)
+    t1 = _t.perf_counter()
+    await lagged.execute_transaction(ops)
+    plain = _t.perf_counter() - t1
+    assert batched < 4 * lagged.rtt + 0.15, (batched, lagged.rtt)                       # ~1 hop + a little work
+    assert plain > 20 * lagged.rtt and batched < plain / 5, (batched, plain)            # the old way paid for every statement
+
+
+async def test_money_operations_stay_within_a_round_trip_budget(lagged, settings):
+    """Every write on the Money screen is a handful of hops. If a change brings back a query per EMI, these fail."""
+    import time as _t
+    from datetime import timedelta
+
+    from src.agent import expenses, spending
+
+    rtt = lagged.rtt
+
+    async def took(coro):
+        t0 = _t.perf_counter()
+        out = await coro
+        return out, _t.perf_counter() - t0
+
+    def within(seconds, hops):
+        assert seconds < hops * rtt + 0.35, f"{seconds:.2f}s is more than {hops} round trips of {rtt * 1000:.0f} ms (+0.35 s of work)"
+
+    first = (timeutil.now(settings) + timedelta(days=5)).date().isoformat()
+    pay, s = await took(expenses.create_payment(lagged, settings, title="Car", total=240000, emis=24, first_due=first))
+    within(s, 16)                                                                          # was ~73 hops
+    assert pay["emi_count"] == 24 and (await lagged.fetchone("SELECT COUNT(*) AS n FROM reminders WHERE session_id = 'expenses' AND status = 'pending'"))["n"] == 12
+    _, s = await took(asyncio.gather(expenses.snapshot(lagged, settings), spending.card(lagged, settings)))
+    within(s, 6)
+    _, s = await took(expenses.update_emi(lagged, settings, pay["emis"][0]["id"], paid=True))
+    within(s, 10)                                                                          # was ~18
+    _, s = await took(expenses.update_emi(lagged, settings, pay["emis"][1]["id"], amount=5000))
+    within(s, 10)
+    pay2, s = await took(expenses.rebalance(lagged, settings, pay["id"]))
+    within(s, 12)                                                                          # was ~74
+    assert sum(e["amount_minor"] for e in pay2["emis"]) == pay2["total_minor"]
+    res, s = await took(expenses.set_emis_paid(lagged, settings, [e["id"] for e in pay["emis"][2:12]], paid=True))
+    within(s, 10)                                                                          # ten EMIs, was ~90+
+    assert res["changed"] == 10
+    assert (await lagged.fetchone("SELECT COUNT(*) AS n FROM reminders WHERE session_id = 'expenses' AND status = 'pending'"))["n"] == 12   # the window rolled forward
+    _, s = await took(spending.add_spend(lagged, settings, amount=100))
+    within(s, 5)
+    _, s = await took(expenses.delete_payment(lagged, pay["id"]))
+    within(s, 5)                                                                           # was ~21
+    assert (await lagged.fetchone("SELECT COUNT(*) AS n FROM reminders WHERE session_id = 'expenses' AND status = 'pending'"))["n"] == 0
+
+
+async def test_a_pooler_that_refuses_batches_makes_the_store_fall_back_without_losing_the_write(pg, monkeypatch):
+    calls = {"script": 0}
+
+    async def refuse(self, operations):
+        calls["script"] += 1
+        raise psycopg.errors.FeatureNotSupported("simulated pooler")
+
+    monkeypatch.setattr(PostgresStore, "_transaction_script", refuse)
+    monkeypatch.setattr(PostgresStore, "BATCH", True)
+    ops = [("INSERT INTO people (name, relationship, notes, updated_at) VALUES (?, ?, ?, ?)", (f"f{i}", "r", "", "t")) for i in range(3)]
+    ids = await pg.execute_transaction(ops)
+    assert len(ids) == 3 and all(ids) and (await pg.fetchone("SELECT COUNT(*) AS n FROM people"))["n"] == 3     # the write still happened, exactly once
+    assert PostgresStore.BATCH is False                                                                        # and the store stopped trying
+    await pg.execute_transaction([("DELETE FROM people WHERE name = ?", ("f0",)), ("DELETE FROM people WHERE name = ?", ("f1",))])
+    assert calls["script"] == 1 and (await pg.fetchone("SELECT COUNT(*) AS n FROM people"))["n"] == 1

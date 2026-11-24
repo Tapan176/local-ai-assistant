@@ -249,6 +249,7 @@ MIGRATIONS = (
     ("tasks", "project", "TEXT NOT NULL DEFAULT ''"),
     ("tasks", "details", "TEXT NOT NULL DEFAULT ''"),
     ("tasks", "reminder_id", "INTEGER"),
+    ("tasks", "remind", "TEXT NOT NULL DEFAULT ''"),
 )
 
 

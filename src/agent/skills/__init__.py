@@ -7,7 +7,7 @@ from typing import Any
 from src.agent.skill import SkillRegistry
 from src.config.settings import Settings
 
-from . import briefing, core, expenses, legacy, local, web
+from . import briefing, core, expenses, legacy, local, notebook, web
 
 
 def build_registry(settings: Settings, finance: Any = None, people: Any = None, calendar: Any = None) -> SkillRegistry:
@@ -16,6 +16,7 @@ def build_registry(settings: Settings, finance: Any = None, people: Any = None, 
     web.register(registry)
     briefing.register(registry)
     expenses.register(registry)
+    notebook.register(registry)
     if finance and people and calendar:
         legacy.register(registry, finance, people, calendar)
     if settings.local_skills_enabled:

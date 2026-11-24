@@ -27,6 +27,9 @@
     <script defer src="settings-integrations.js"></script>
     <script defer src="money.js"></script>
     <script defer src="money-spend.js"></script>
+    <script defer src="panel-kit.js"></script>
+    <script defer src="work.js"></script>
+    <script defer src="growth.js"></script>
 </head>
 
 <body>
@@ -142,12 +145,14 @@
             </main>
 
             <!-- ── Side panel: Today + History ─────────────────── -->
-            <section id="side-panel" class="side" aria-label="Today, history, money and settings" role="complementary">
+            <section id="side-panel" class="side" aria-label="Today, history, money, work, growth and settings" role="complementary">
                 <div class="side-head">
                     <div class="tabs" role="tablist">
                         <button type="button" role="tab" id="tab-today" data-tab="today" aria-selected="true">Today</button>
                         <button type="button" role="tab" id="tab-history" data-tab="history" aria-selected="false">History</button>
                         <button type="button" role="tab" id="tab-money" data-tab="money" aria-selected="false">Money</button>
+                        <button type="button" role="tab" id="tab-work" data-tab="work" aria-selected="false">Work</button>
+                        <button type="button" role="tab" id="tab-growth" data-tab="growth" aria-selected="false">Growth</button>
                         <button type="button" role="tab" id="tab-settings" data-tab="settings" aria-selected="false">Settings</button>
                     </div>
                     <div class="side-actions">
@@ -160,6 +165,8 @@
                 <div id="panel-today" class="panel" role="tabpanel" aria-labelledby="tab-today"></div>
                 <div id="panel-history" class="panel hidden" role="tabpanel" aria-labelledby="tab-history"></div>
                 <div id="panel-money" class="panel hidden" role="tabpanel" aria-labelledby="tab-money"></div>
+                <div id="panel-work" class="panel hidden" role="tabpanel" aria-labelledby="tab-work"></div>
+                <div id="panel-growth" class="panel hidden" role="tabpanel" aria-labelledby="tab-growth"></div>
                 <div id="panel-settings" class="panel hidden" role="tabpanel" aria-labelledby="tab-settings"></div>
             </section>
         </div>
@@ -176,6 +183,9 @@
         </div>
     </div>
 
+    <div id="busy-bar" class="busy-bar hidden" aria-hidden="true"></div>
+    <div id="busy" class="busy hidden" aria-hidden="true"><span class="spinner"></span><span id="busy-text"></span></div>
+    <span id="busy-sr" class="sr-only" role="status" aria-live="polite"></span>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
     <!-- Access-token gate: shown whenever the server answers 401 / WebSocket close 4401 -->

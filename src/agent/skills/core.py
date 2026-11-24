@@ -10,7 +10,8 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from src.agent import recurrence, timeutil
+from src.agent import recurrence, timeutil, workspace
+from src.agent.expenses import ExpenseError
 from src.agent.skill import SkillContext, SkillRegistry, schema
 
 
@@ -198,45 +199,46 @@ async def delete_note(ctx: SkillContext, args: dict[str, Any]) -> str:
 
 # ── tasks (to-dos) ──────────────────────────────────────────────────
 async def add_task(ctx: SkillContext, args: dict[str, Any]) -> str:
-    due = None
-    if args.get("due"):
-        parsed = timeutil.parse_when(str(args["due"]), ctx.settings)
-        if parsed is None:
-            return f"I couldn't understand the due date '{args['due']}'. Use an ISO date/time like 2026-12-01T17:00."
-        due = parsed.isoformat()
-    priority = str(args.get("priority") or "normal").lower()
-    if priority not in {"low", "normal", "high"}:
-        priority = "normal"
-    task_id = await ctx.store.execute(
-        "INSERT INTO tasks (title, due_at, priority, status, created_at) VALUES (?, ?, ?, 'open', ?)",
-        (str(args["title"]).strip(), due, priority, _utc_now()),
-    )
-    return f"Added task #{task_id}: {args['title']}" + (f" (due {due})" if due else "")
+    try:
+        task = await workspace.create_task(
+            ctx.store, ctx.settings, title=args["title"], project=args.get("project") or "", priority=args.get("priority") or "normal",
+            due=args.get("due"), details=args.get("details") or "", remind=args.get("remind") or "",
+        )
+    except ExpenseError as exc:
+        return str(exc)
+    when = f" (due {task['due_date']}{' ' + task['due_time'] if task['due_time'] else ''})" if task["due_date"] else ""
+    extra = f" in project {task['project']}" if task["project"] else ""
+    note = " I will remind you." if task["remind"] else ""
+    return f"Added task #{task['id']}: {task['title']}{extra}{when}.{note}"
 
 
 async def list_tasks(ctx: SkillContext, args: dict[str, Any]) -> Any:
     status = str(args.get("status") or "open").lower()
-    where, params = ("", ()) if status == "all" else ("WHERE status = ?", (status,))
-    rows = await ctx.store.fetchall(
-        f"SELECT id, title, due_at, priority, status FROM tasks {where} "
-        "ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END, due_at IS NULL, due_at LIMIT 50",
-        params,
-    )
-    return rows or f"No {status} tasks."
+    try:
+        tasks = await workspace.list_tasks(ctx.store, ctx.settings, status, args.get("project"), args.get("query"), limit=50)
+    except ExpenseError as exc:
+        return str(exc)
+    return [
+        {"id": t["id"], "title": t["title"], "project": t["project"] or None, "priority": t["priority"], "due": t["due_at"], "overdue": t["overdue"], "status": t["status"]}
+        for t in tasks
+    ] or f"No {status} tasks."
 
 
 async def complete_task(ctx: SkillContext, args: dict[str, Any]) -> str:
     task_id = _int(args["id"])
-    row = await ctx.store.fetchone("SELECT title FROM tasks WHERE id = ?", (task_id,))
-    if not row:
+    try:
+        task = await workspace.set_task_done(ctx.store, ctx.settings, task_id, True)
+    except ExpenseError:
         return f"No task #{task_id}."
-    await ctx.store.execute("UPDATE tasks SET status='done', completed_at=? WHERE id=?", (_utc_now(), task_id))
-    return f"Completed task #{task_id}: {row['title']}"
+    return f"Completed task #{task_id}: {task['title']}"
 
 
 async def delete_task(ctx: SkillContext, args: dict[str, Any]) -> str:
     task_id = _int(args["id"])
-    await ctx.store.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+    try:
+        await workspace.delete_task(ctx.store, task_id)
+    except ExpenseError:
+        return f"No task #{task_id}."
     return f"Deleted task #{task_id}."
 
 
@@ -434,8 +436,11 @@ def register(registry: SkillRegistry) -> None:
         S(
             {
                 "title": {"type": "string"},
-                "due": {"type": "string", "description": "Optional ISO date/time or natural phrase"},
+                "due": {"type": "string", "description": "Optional ISO date/time or natural phrase. A date alone means by the end of that day."},
                 "priority": {"type": "string", "enum": ["low", "normal", "high"]},
+                "project": {"type": "string", "description": "Optional project or area, e.g. 'Website redesign'."},
+                "details": {"type": "string", "description": "Optional longer description."},
+                "remind": {"type": "string", "enum": ["due", "morning", "day_before"], "description": "Optional reminder: at the due time, 9 am that day, or 9 am the day before. Needs `due`."},
             },
             ["title"],
         ),
@@ -443,8 +448,8 @@ def register(registry: SkillRegistry) -> None:
     )
     registry.add(
         "list_tasks",
-        "List to-do items.",
-        S({"status": {"type": "string", "enum": ["open", "done", "all"]}}),
+        "List to-do items, optionally for one project or matching some text.",
+        S({"status": {"type": "string", "enum": ["open", "done", "all"]}, "project": {"type": "string"}, "query": {"type": "string"}}),
         list_tasks,
     )
     registry.add("complete_task", "Mark a task done by id.", S({"id": {"type": "integer"}}, ["id"]), complete_task)
