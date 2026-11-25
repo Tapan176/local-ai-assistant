@@ -36,7 +36,7 @@ def test_icons_exist_with_the_declared_sizes_and_include_maskable():
     sizes = set()
     purposes = set()
     for icon in MANIFEST["icons"]:
-        path = WEB / icon["src"]
+        path = WEB / icon["src"].split("?")[0]
         assert path.exists(), f"missing icon file {icon['src']}"
         if icon["type"] == "image/png":
             w, h = png_size(path)
@@ -52,7 +52,7 @@ def test_shortcuts_point_inside_the_app():
     assert MANIFEST["shortcuts"], "app shortcuts (long-press the icon) are part of the install experience"
     for shortcut in MANIFEST["shortcuts"]:
         assert shortcut["url"].startswith(MANIFEST["scope"])
-        assert (WEB / shortcut["icons"][0]["src"]).exists()
+        assert (WEB / shortcut["icons"][0]["src"].split("?")[0]).exists()
 
 
 def test_index_links_everything_the_installer_needs():

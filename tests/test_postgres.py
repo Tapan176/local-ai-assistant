@@ -712,3 +712,16 @@ async def test_graph_memory_works_the_same_on_postgres(pg):
     assert await graph.forget_node(pg, node["id"]) == "Quillon Labs"
     assert "Quillon" not in await graph.context_block(pg, "zorya")
     assert (await pg.fetchone("SELECT COUNT(*) AS n FROM kg_edges"))["n"] == 2
+
+
+async def test_export_runs_on_postgres_and_leaves_secrets_out(pg, settings):
+    import json
+
+    from src.agent import export as data_export
+
+    await pg.execute("INSERT INTO memories (content, category, created_at) VALUES ('likes tea', 'preference', '2026-11-25')")
+    await pg.execute("INSERT INTO app_settings (id, value, updated_at) VALUES ('telegram_token', 'SECRET-TOKEN-VALUE', '2026-11-25') ON CONFLICT (id) DO NOTHING")
+    out = await data_export.build(pg, settings)
+    text = json.dumps(out)
+    assert out["counts"]["memories"] >= 1 and "SECRET-TOKEN-VALUE" not in text
+    assert set(out["tables"]) == set(data_export.TABLES) | {"settings"}

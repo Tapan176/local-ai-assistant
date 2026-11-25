@@ -23,7 +23,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const FRAME = (token) => JSON.stringify({ auth: token });
 
 // routes: { "GET /api/history": body | (url) => body | {status, body} }
-function boot({ storage = {}, coarse = false, routes: extra = {}, url, ua, standalone = false, drawer = false, sw = false, insecure = false, push, noPush = false, version } = {}) {
+function boot({ storage = {}, coarse = false, routes: extra = {}, url, ua, standalone = false, drawer = false, sw = false, insecure = false, push, noPush = false, version, speech = false } = {}) {
   // the poller hits /api/notifications on every boot, so it is always answered; other unknown routes are a 401
   const routes = { "GET /api/notifications": { notifications: [] }, ...extra };
   const dom = new JSDOM(html, { url: url || "https://tapan.example.com/web/index.html", runScripts: "outside-only", pretendToBeVisual: true });
@@ -36,6 +36,8 @@ function boot({ storage = {}, coarse = false, routes: extra = {}, url, ua, stand
   const sockets = [];
   w.WebSocket = class { constructor(url) { this.url = url; this.readyState = 0; this.sent = []; sockets.push(this); } send(t) { this.sent.push(t); } close() { this.readyState = 3; } };
   w.WebSocket.OPEN = 1; w.WebSocket.CONNECTING = 0;
+  const recs = [];
+  if (speech) w.webkitSpeechRecognition = class { constructor() { this.started = 0; this.aborted = 0; recs.push(this); } start() { this.started++; } stop() { this.onend && this.onend(); } abort() { this.aborted++; } };
 
   const calls = [];
   w.fetch = async (url, opts = {}) => {
@@ -95,7 +97,7 @@ function boot({ storage = {}, coarse = false, routes: extra = {}, url, ua, stand
   w.init();
   const $ = (id) => w.document.getElementById(id);
   return {
-    w, sockets, calls, spoken, swCalls, pushLog, $, S: () => w.TapanApp.state,
+    w, sockets, recs, calls, spoken, swCalls, pushLog, $, S: () => w.TapanApp.state,
     overlay: () => $("auth-overlay"), msg: () => $("auth-msg"), pill: () => $("conn-pill"),
     chat: () => $("chat-history"), box: () => $("user-input"),
     open: (s) => { s.readyState = 1; s.onopen && s.onopen(); },
@@ -1767,6 +1769,111 @@ const authed = (t, s = t.sockets[t.sockets.length - 1]) => { t.open(s); t.say(s,
     state = { nodes: [], edges: [], totals: { nodes: 0, edges: 0, max_nodes: 5000, max_edges: 20000 } };
     gg = await openGraph();
     check("graph: an empty graph explains how to fill it", /Nothing yet/.test(gg.body.textContent) && /tell the assistant/i.test(gg.body.textContent));
+  }
+
+  // ── Your data (export) ────────────────────────────────────────────
+  {
+    const dd = boot({ drawer: true, routes: m0Routes({ "GET /api/export": { exported_at: "2026-11-25T10:00:00+00:00", counts: { memories: 3, notes: 2 }, tables: {} } }) });
+    authed(dd); await wait(40);
+    dd.$("today-btn").click(); dd.$("tab-settings").click(); await wait(120);
+    const sec = [...dd.$("panel-settings").querySelectorAll("details")].find((d) => d.dataset.id === "your-data");
+    check("export: Settings has a Your data section", !!sec);
+    sec.open = true; sec.dispatchEvent(new dd.w.Event("toggle")); await wait(60);
+    const saved = [];
+    dd.w.URL.createObjectURL = (b) => { saved.push(b); return "blob:data"; };
+    dd.w.URL.revokeObjectURL = () => {};
+    let downloaded = null;
+    dd.w.HTMLAnchorElement.prototype.click = function () { downloaded = { href: this.href, name: this.download }; };
+    const body = sec.querySelector(".set-body");
+    check("export: it says what is included and that the token is never included", /never includes your access token/.test(body.textContent) && /not encrypted/.test(body.textContent));
+    body.querySelector("button").click(); await wait(120);
+    check("export: the file is named by date and downloaded as JSON", downloaded && downloaded.name === "tapan-data-2026-11-25.json" && saved.length === 1 && saved[0].type === "application/json");
+    check("export: the user sees how many records were saved", /Downloaded 5 records/.test(body.textContent) && !body.querySelector("button").disabled);
+    check("export: the request carries the access token like every other call", dd.calls.some((c) => /\/api\/export/.test(c.url)));
+    const dd2 = boot({ drawer: true, routes: m0Routes({ "GET /api/export": { status: 500, body: {} } }) });
+    authed(dd2); await wait(40);
+    dd2.$("today-btn").click(); dd2.$("tab-settings").click(); await wait(120);
+    const sec2 = [...dd2.$("panel-settings").querySelectorAll("details")].find((d) => d.dataset.id === "your-data");
+    sec2.open = true; sec2.dispatchEvent(new dd2.w.Event("toggle")); await wait(60);
+    sec2.querySelector("button").click(); await wait(120);
+    check("export: a failure is reported plainly and the button works again", /could not prepare/i.test(sec2.textContent) && !sec2.querySelector("button").disabled);
+  }
+
+  // ── Hey Tapan (wake word) ─────────────────────────────────────────
+  {
+    const wakeRecs = (t) => t.recs.filter((r) => r.continuous);
+    const cmdRec = (t) => t.recs.find((r) => !r.continuous);
+    const hear = (rec, text, isFinal) => rec.onresult && rec.onresult({ resultIndex: 0, results: [Object.assign([{ transcript: text }], { isFinal })] });
+    const wb = async (opts = {}) => { const t = boot({ routes: navRoutes(), speech: true, ...opts }); authed(t); await wait(40); return t; };
+
+    let t0 = boot({ routes: navRoutes() }); authed(t0); await wait(30);
+    check("wake: with no speech support the switches stay hidden", t0.$("wake-btn").classList.contains("hidden") && t0.$("more-wake").classList.contains("hidden"));
+
+    let w1 = await wb();
+    check("wake: with speech support the switch is offered, named, and OFF by default", !w1.$("wake-btn").classList.contains("hidden") && w1.$("wake-btn").getAttribute("aria-pressed") === "false" && /off/i.test(w1.$("wake-btn").getAttribute("aria-label")));
+    await wait(1500);
+    check("wake: while it is off the microphone is never opened for listening", wakeRecs(w1).length === 0);
+
+    w1.$("wake-btn").click(); await wait(60);
+    check("wake: turning it on is remembered, shown, and tells the user the truth about audio and the app needing to be open", w1.w.localStorage.getItem("tapan.wake") === "on" && w1.$("wake-btn").getAttribute("aria-pressed") === "true" && /while the app is open/.test(w1.$("toast").textContent) && /audio/.test(w1.$("toast").textContent));
+    check("wake: it starts one continuous listener", wakeRecs(w1).length === 1 && wakeRecs(w1)[0].started === 1 && wakeRecs(w1)[0].interimResults === true);
+
+    const wr = wakeRecs(w1)[0];
+    hear(wr, "tapan is a nice name", true);
+    hear(wr, "what a hey day for tapan", true);
+    check("wake: the name in ordinary talk does not trigger it", wr.aborted === 0 && !cmdRec(w1).started);
+    hear(wr, "hey tapan", false); await wait(250);
+    check("wake: 'Hey Tapan' on its own hands over to the normal microphone for the request", wr.aborted === 1 && cmdRec(w1).started === 1);
+    cmdRec(w1).onend && cmdRec(w1).onend(); await wait(900);
+    check("wake: after the request the wake listener comes back", wakeRecs(w1).length === 2 && wakeRecs(w1)[1].started === 1);
+
+    const wr2 = wakeRecs(w1)[1];
+    const socket = w1.sockets[w1.sockets.length - 1];
+    const base = socket.sent.length;
+    hear(wr2, "hey tapan what is the weather", false);
+    check("wake: a sentence still being spoken is not sent half-finished", socket.sent.length === base && wr2.aborted === 0);
+    hear(wr2, "Hey Tapan, what is the weather", true); await wait(30);
+    check("wake: 'Hey Tapan, <request>' sends the request without the wake phrase", socket.sent.pop() === "what is the weather" && wr2.aborted === 1);
+    hear(wr2, "hey tapan again", true);
+    check("wake: one phrase triggers exactly once", socket.sent.length === 0 || socket.sent.length === base);
+
+    // a listening session that the browser ends is restarted; speech from the assistant pauses it
+    let w2 = await wb({ storage: { "tapan.wake": "on" } });
+    await wait(1900);
+    check("wake: a saved 'on' resumes after a reload", wakeRecs(w2).length === 1);
+    wakeRecs(w2)[0].onend(); await wait(900);
+    check("wake: when the browser ends a long session it starts a new one", wakeRecs(w2).length === 2);
+    w2.S().isSpeaking = true;
+    wakeRecs(w2)[1].onend(); await wait(900);
+    check("wake: it does not listen while the assistant is speaking (it would hear itself)", wakeRecs(w2).length === 2);
+    w2.S().isSpeaking = false;
+    w2.w.document.dispatchEvent(new w2.w.Event("visibilitychange")); await wait(900);          // speech over: it resumes
+    check("wake: it resumes once the assistant has finished speaking", wakeRecs(w2).length === 3 && wakeRecs(w2)[2].started === 1);
+
+    // leaving the screen stops it
+    Object.defineProperty(w2.w.document, "hidden", { value: true, configurable: true });
+    w2.w.document.dispatchEvent(new w2.w.Event("visibilitychange"));
+    const live = wakeRecs(w2)[wakeRecs(w2).length - 1];
+    check("wake: switching away from the app stops listening", live.aborted === 1);
+    Object.defineProperty(w2.w.document, "hidden", { value: false, configurable: true });
+    w2.w.document.dispatchEvent(new w2.w.Event("visibilitychange")); await wait(900);
+    check("wake: coming back resumes it", wakeRecs(w2).length === 4);
+
+    // off means off
+    w2.$("wake-btn").click(); await wait(30);
+    const last = wakeRecs(w2)[wakeRecs(w2).length - 1];
+    check("wake: turning it off stops the microphone and remembers 'off'", last.aborted === 1 && w2.w.localStorage.getItem("tapan.wake") === "off" && w2.$("wake-btn").getAttribute("aria-pressed") === "false");
+    const n = wakeRecs(w2).length;
+    await wait(1000);
+    check("wake: and it stays off", wakeRecs(w2).length === n);
+
+    // the phone-sized menu has the same switch, and permission problems switch it off honestly
+    let w3 = await wb({ drawer: true });
+    w3.$("more-wake") && [...w3.w.document.querySelectorAll('.bnav-btn[data-dest="more"]')].forEach((b) => b.click()); await wait(20);
+    w3.$("more-wake").click(); await wait(60);
+    check("wake: the More menu has the same switch and shows its state", w3.$("more-wake").getAttribute("aria-pressed") === "true" && /^On/.test(w3.$("more-wake-state").textContent) && wakeRecs(w3).length === 1);
+    wakeRecs(w3)[0].onerror({ error: "not-allowed" }); await wait(20);
+    check("wake: a blocked microphone switches it off and says why", w3.S().wake === false && /blocked/i.test(w3.$("toast").textContent) && w3.w.localStorage.getItem("tapan.wake") === "off");
   }
 
   console.log(failures ? `\n${failures} FAILED` : "\nALL UI TESTS PASSED");

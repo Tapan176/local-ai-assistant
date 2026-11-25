@@ -82,4 +82,29 @@
     }
 
     register('memory-graph', 'Memory graph', (container) => render(container, ''), { order: 30 });
+
+    // ── Your data: one file with everything (a readable backup, and the way out) ─
+    function renderData(container) {
+        container.replaceChildren();
+        container.appendChild(note('Download everything the assistant keeps about you as one file: chat history, memories, reminders, payments and EMIs, spending, subscriptions, tasks, notes, '
+            + 'journal and the memory graph. It never includes your access token, Telegram token or notification keys. The file is not encrypted, so keep it somewhere private.'));
+        const out = note('');
+        const btn = button('Download my data', async () => {
+            btn.disabled = true; out.textContent = 'Preparing…'; out.className = 'set-note';
+            try {
+                const data = await host().api('/api/export');
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = el('a'); a.href = url; a.download = `tapan-data-${String(data.exported_at || '').slice(0, 10) || 'export'}.json`;
+                document.body.appendChild(a); a.click(); a.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 10000);
+                const total = Object.values(data.counts || {}).reduce((x, y) => x + y, 0);
+                out.textContent = `Downloaded ${total} records (${Math.max(1, Math.round(blob.size / 1024))} KB).`;
+                host().toast('Your data was downloaded');
+            } catch (err) { out.textContent = 'Could not prepare the file. Check the connection and try again.'; out.className = 'set-note bad'; }
+            btn.disabled = false;
+        }, 'wide-btn');
+        container.append(btn, out);
+    }
+    register('your-data', 'Your data', renderData, { order: 40 });
 })();

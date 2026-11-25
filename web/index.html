@@ -7,8 +7,8 @@
     <meta name="theme-color" content="#0c0f15">
     <meta name="color-scheme" content="dark light">
     <title>TAPAN_AI</title>
-    <link rel="icon" href="icon.svg" type="image/svg+xml">
-    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+    <link rel="icon" href="icon.svg?v=2" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=2">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="Tapan">
@@ -69,6 +69,10 @@
                     <svg class="i-always" viewBox="0 0 24 24"><path fill="currentColor" d="M3 9v6h4l5 4V5L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4zM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6z" /></svg>
                     <span class="lbl" id="voice-mode-label">Voice</span>
                 </button>
+                <button id="wake-btn" class="btn hidden" type="button" aria-pressed="false" aria-label="Hands-free: say Hey Tapan. Currently off.">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z" /><path d="M19 11a7 7 0 0 1-14 0M12 18v3" /><path class="wake-waves" d="M21 7v6M3 7v6" /></svg>
+                    <span class="lbl" id="wake-label">Hey Tapan</span>
+                </button>
                 <button id="new-chat-btn" class="btn" type="button" aria-label="Start a new conversation">
                     <svg viewBox="0 0 24 24"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" /></svg>
                     <span class="lbl">New</span>
@@ -108,22 +112,22 @@
                         <p>What can I take care of? Tip: paste a whole list and I'll handle every item at once.</p>
                         <div class="starters">
                             <button type="button" class="starter" data-send="Give me a briefing on my day">
-                                <span class="emoji">☀️</span><b>Brief me</b><small>Reminders, tasks, weather</small>
+                                <span class="s-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></svg></span><b>Brief me</b><small>Reminders, tasks, weather</small>
                             </button>
                             <button type="button" class="starter" data-fill="Set these reminders:&#10;1. &#10;2. &#10;3. ">
-                                <span class="emoji">⏰</span><b>Several reminders</b><small>Paste a list, I schedule all</small>
+                                <span class="s-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2 2M5 3 2 6M22 6l-3-3" /></svg></span><b>Several reminders</b><small>Paste a list, I schedule all</small>
                             </button>
                             <button type="button" class="starter" data-fill="Add these tasks:&#10;- &#10;- &#10;- ">
-                                <span class="emoji">✅</span><b>Add tasks</b><small>One per line</small>
+                                <span class="s-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" /><path d="m8 12 3 3 5-6" /></svg></span><b>Add tasks</b><small>One per line</small>
                             </button>
                             <button type="button" class="starter" data-send="What's the weather like today?">
-                                <span class="emoji">🌦️</span><b>Weather</b><small>Today and next days</small>
+                                <span class="s-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4 4 0 0 1-.5-7.97A6 6 0 0 1 18 11a3.5 3.5 0 0 1-.5 7z" /></svg></span><b>Weather</b><small>Today and next days</small>
                             </button>
                             <button type="button" class="starter" data-fill="Search the web for ">
-                                <span class="emoji">🔎</span><b>Search the web</b><small>Current info</small>
+                                <span class="s-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg></span><b>Search the web</b><small>Current info</small>
                             </button>
                             <button type="button" class="starter" data-fill="What did we talk about regarding ">
-                                <span class="emoji">🧠</span><b>Recall a chat</b><small>Search past conversations</small>
+                                <span class="s-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5M12 7v5l3 2" /></svg></span><b>Recall a chat</b><small>Search past conversations</small>
                             </button>
                         </div>
                     </section>
@@ -209,6 +213,7 @@
                         <button type="button" data-pref="dark" aria-pressed="false">Dark</button>
                     </span>
                 </div>
+                <button id="more-wake" class="more-item hidden" type="button" aria-pressed="false"><span>Hey Tapan<small id="more-wake-state">Hands-free, only while the app is open. Off.</small></span></button>
                 <button id="more-install" class="more-item hidden" type="button"><span>Install the app<small>Opens full-screen from your home screen</small></span></button>
                 <button id="more-lock" class="more-item hidden" type="button"><span>Lock<small>Forget the access token on this device</small></span></button>
             </div>

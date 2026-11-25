@@ -276,7 +276,8 @@ h1 {
     background: var(--surface-2); border: 1px solid var(--line); border-radius: 14px; transition: transform 0.15s, border-color 0.15s, background 0.15s;
 }
 .starter:hover { border-color: rgba(var(--accent-rgb), 0.45); background: var(--surface-3); transform: translateY(-1px); }
-.starter .emoji { font-size: 1.3rem; line-height: 1.2; }
+.starter .s-ico { display: inline-grid; place-items: center; width: 38px; height: 38px; border-radius: 12px; color: var(--accent); background: rgba(var(--accent-rgb), 0.12); }
+.starter .s-ico svg { width: 22px; height: 22px; }
 .starter b { font-size: 0.92rem; }
 .starter small { color: var(--muted); font-size: 0.8rem; line-height: 1.3; }
 
@@ -898,3 +899,9 @@ h1 { font: 650 1.12rem/1 var(--font-ui); letter-spacing: -0.2px; display: flex; 
 .graph-summary { margin: 6px 0 0; color: var(--muted); overflow-wrap: anywhere; }
 .graph-edges { margin: 8px 0; display: grid; gap: 4px; }
 .graph-edges li { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; overflow-wrap: anywhere; }
+
+/* ── Hey Tapan (hands-free switch) ────────────────────────── */
+#wake-btn .wake-waves { opacity: 0; transition: opacity 0.2s; }
+#wake-btn.active { color: var(--accent); background: rgba(var(--accent-rgb), 0.14); }
+#wake-btn.active .wake-waves { opacity: 1; }
+.more-item[aria-pressed="true"] small { color: var(--accent); }

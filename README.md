@@ -169,6 +169,19 @@ your life and how they connect ("Zorya works at Quillon Labs", "Quillon Labs is 
   a Neo4j backend could replace it later without touching the assistant; for one person's life a hosted graph database adds a service
   to run and a size limit, and buys nothing at this scale.
 
+## Hey Tapan (hands-free, optional)
+
+Off by default. Turn it on from the **Hey Tapan** switch in the top bar (desktop) or *More* (phone); turn it off the same way. It is remembered per device.
+
+- Say "Hey Tapan" and then your request, either in one breath ("Hey Tapan, what's the weather") or after a pause (it then opens the microphone for your request). Saying the name in normal conversation does not trigger it; the phrase must start with hey, hi, hello or ok.
+- **Honest limits**: a web app cannot listen in the background. It works only while the app is open and on screen, and stops when you switch away or lock the phone. A true always-listening assistant needs a native Android app.
+- **Privacy**: the listening is done by your browser's speech service (on Chrome and Edge that means audio goes to the browser maker). The switch says so when you turn it on. If the microphone is blocked, it switches itself off and tells you.
+- On some Android phones Chrome plays a short sound each time it restarts listening; if that bothers you, leave it off and use the microphone button.
+
+## Your data
+
+*Settings → Your data → Download my data* gives you everything as one JSON file: chat history, memories, reminders, payments and EMIs, spending, subscriptions, tasks, notes, journal and the memory graph. It never contains your access token, Telegram token or notification keys (an allow-list, so a new secret can never slip in). The file is not encrypted: keep it private. Amounts are in minor units (paise).
+
 ## Pictures in chat
 
 Tap the paperclip, paste a screenshot, or drop a picture on the chat (up to three at a time). The browser shrinks each one to at most

@@ -13,6 +13,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.agent import actions, timeutil, weather
+from src.agent import export as data_export
 from src.config.settings import Settings
 from src.interfaces import api_expenses, api_graph, api_telegram, api_workspace
 
@@ -59,6 +60,11 @@ def register(app: FastAPI, *, runtime: Any, settings: Settings, require_auth: Ca
     api_expenses.register(app, runtime=runtime, settings=settings, require_auth=require_auth, limiter=limiter)
     api_workspace.register(app, runtime=runtime, settings=settings, require_auth=require_auth, limiter=limiter)
     api_graph.register(app, runtime=runtime, settings=settings, require_auth=require_auth, limiter=limiter)
+
+    @app.get("/api/export", dependencies=[Depends(require_auth)])
+    async def export_everything() -> dict[str, Any]:
+        """Everything the assistant keeps about the user, as one JSON document (secrets are never included)."""
+        return await data_export.build(store, settings)
     if getattr(runtime, "telegram", None):
         api_telegram.register(app, runtime=runtime, settings=settings, require_auth=require_auth, limiter=limiter)
 

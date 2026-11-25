@@ -66,6 +66,7 @@ const state = {
     busy: false, busyTimer: null, workEl: null, activity: [], pendingResync: false,
     lastSent: '', lastInputWasVoice: false, lastDay: null, unread: 0, tab: 'today', baseTitle: document.title,
     isSpeaking: false, isListening: false, recognition: null, voices: [], selectedVoice: null,
+    wake: store('tapan.wake') === 'on', wakeRec: null, heyTimer: null, wakeDelay: 600, wakeHeard: false,
 };
 
 const dom = {};
@@ -86,7 +87,7 @@ function bindDom() {
         installBtn: $('install-btn'), installBanner: $('install-banner'), installYes: $('install-yes'), installNo: $('install-no'),
         installSheet: $('install-sheet'), installSteps: $('install-steps'), installClose: $('install-close'),
         bnav: $('bottom-nav'), panelTitle: $('panel-title'), themeBtn: $('theme-btn'), moreSheet: $('more-sheet'), moreClose: $('more-close'), moreHistory: $('more-history'),
-        moreSettings: $('more-settings'), moreInstall: $('more-install'), moreLock: $('more-lock'),
+        moreSettings: $('more-settings'), moreInstall: $('more-install'), moreLock: $('more-lock'), wakeBtn: $('wake-btn'), moreWake: $('more-wake'), moreWakeState: $('more-wake-state'),
         authOverlay: $('auth-overlay'), authForm: $('auth-form'), authInput: $('auth-input'), authMsg: $('auth-msg'),
     });
 }
@@ -274,6 +275,7 @@ function scheduleReconnect(seq) {
 function onAuthenticated() {
     clearTimeout(state.wakeTimer);
     hideAuth();
+    resumeWake();
     state.everOnline = true;
     state.retry = 0;
     setConn(state.busy ? 'busy' : 'online', state.busy ? 'Thinking…' : 'Online');
@@ -1292,8 +1294,8 @@ function speak(text) {
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(clean);
     if (state.selectedVoice) utterance.voice = state.selectedVoice;
-    utterance.onstart = () => { state.isSpeaking = true; dom.stopBtn.classList.remove('hidden'); if (!state.busy) dom.app.dataset.orb = 'speaking'; };
-    utterance.onend = utterance.onerror = () => { state.isSpeaking = false; dom.stopBtn.classList.add('hidden'); if (!state.busy) dom.app.dataset.orb = 'idle'; };
+    utterance.onstart = () => { state.isSpeaking = true; stopWake(); dom.stopBtn.classList.remove('hidden'); if (!state.busy) dom.app.dataset.orb = 'speaking'; };
+    utterance.onend = utterance.onerror = () => { state.isSpeaking = false; dom.stopBtn.classList.add('hidden'); if (!state.busy) dom.app.dataset.orb = 'idle'; resumeWake(); };
     window.speechSynthesis.speak(utterance);
 }
 
@@ -1333,6 +1335,7 @@ function initVoice() {
         dom.voiceBtn.classList.remove('active');
         dom.voiceBtn.setAttribute('aria-pressed', 'false');
         dom.userInput.placeholder = INPUT_PLACEHOLDER;
+        resumeWake();
     };
     state.recognition.onerror = (e) => { if (e.error === 'not-allowed') toast('Microphone permission is blocked for this site'); };
     state.recognition.onresult = (event) => {
@@ -1351,6 +1354,96 @@ function initVoice() {
         if (state.isListening) state.recognition.stop();
         else { try { state.recognition.start(); } catch (e) { /* already started */ } }
     });
+}
+
+// ── Wake word: say "Hey Tapan", then your request ────────────────
+// Opt-in and off by default. A web page cannot listen in the background: this works only while the app is open and on screen
+// (it stops when you switch away or lock the phone). The browser's own speech service does the listening, which on Chrome and Edge
+// means audio is sent to the browser vendor, so the switch says so. The phrase must start with "hey/hi/ok" so the name said in
+// ordinary conversation does not trigger it.
+const WAKE_RE = /\b(?:hey|hi|hello|ok|okay)[\s,]+(?:tapan|tappan|tapaan|tapon|topan)\b[\s,.!?:-]*/i;
+const WAKE_SUPPORTED = () => Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
+
+function paintWake() {
+    const supported = WAKE_SUPPORTED() && Boolean(state.recognition);
+    const on = state.wake;
+    if (dom.wakeBtn) {
+        dom.wakeBtn.classList.toggle('hidden', !supported);
+        dom.wakeBtn.setAttribute('aria-pressed', String(on));
+        dom.wakeBtn.classList.toggle('active', on);
+        dom.wakeBtn.setAttribute('aria-label', on ? 'Hands-free is on: say Hey Tapan. Tap to turn off.' : 'Hands-free: say Hey Tapan. Currently off. Tap to turn on.');
+        dom.wakeBtn.title = on ? 'Listening for "Hey Tapan" while this app is open' : 'Turn on "Hey Tapan"';
+    }
+    if (dom.moreWake) {
+        dom.moreWake.classList.toggle('hidden', !supported);
+        dom.moreWake.setAttribute('aria-pressed', String(on));
+        dom.moreWakeState.textContent = on ? 'On: listening while the app is open. Tap to turn off.' : 'Hands-free, only while the app is open. Off.';
+    }
+}
+
+function wakeShouldListen() {
+    return state.wake && state.recognition && !document.hidden && !state.isListening && !state.isSpeaking && !state.authNeeded;
+}
+
+function stopWake() {
+    clearTimeout(state.heyTimer);
+    const rec = state.wakeRec;
+    state.wakeRec = null;
+    if (rec) { rec.onend = null; rec.onresult = null; try { rec.abort(); } catch (e) { /* already stopped */ } }
+}
+
+function resumeWake(delay = state.wakeDelay) {
+    clearTimeout(state.heyTimer);
+    if (!wakeShouldListen() || state.wakeRec) return;
+    state.heyTimer = setTimeout(startWake, delay);
+}
+
+function startWake() {
+    if (!wakeShouldListen() || state.wakeRec) return;
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const rec = new Recognition();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = navigator.language || 'en-US';
+    state.wakeHeard = false;
+    rec.onresult = (event) => {
+        if (state.wakeHeard) return;
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+            const text = event.results[i][0].transcript;
+            const m = WAKE_RE.exec(text);
+            if (!m) continue;
+            const rest = text.slice(m.index + m[0].length).trim();
+            if (rest && !event.results[i].isFinal) return;               // wait for the full sentence: "hey tapan what's the weather"
+            state.wakeHeard = true;
+            stopWake();
+            if (rest.length > 1) {
+                dom.userInput.value = rest; autoGrow(); refreshSend();
+                sendMessage(undefined, { voice: true });
+                setTimeout(resumeWake, 1500);
+            } else {
+                announce('Listening');
+                setTimeout(() => { try { state.recognition.start(); } catch (e) { resumeWake(); } }, 150);       // the normal microphone takes the request
+            }
+            return;
+        }
+    };
+    rec.onerror = (e) => {
+        if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { setWake(false); toast('Microphone access is blocked, so Hey Tapan is off.', 4500); }
+    };
+    rec.onend = () => { state.wakeRec = null; resumeWake(); };            // browsers end long listening sessions on their own: start again
+    try { rec.start(); state.wakeRec = rec; } catch (e) { state.wakeRec = null; }
+}
+
+function setWake(on, opts = {}) {
+    state.wake = Boolean(on) && WAKE_SUPPORTED();
+    store('tapan.wake', state.wake ? 'on' : 'off');
+    paintWake();
+    if (!state.wake) { stopWake(); if (!opts.quiet) announce('Hey Tapan is off'); return; }
+    if (!opts.quiet) {
+        toast('Hey Tapan is on while the app is open. Your browser\'s speech service listens, and it may send audio to the browser maker.', 6000);
+        announce('Hey Tapan is on');
+    }
+    resumeWake(0);
 }
 
 // ── Status orb (small three.js scene; pauses when hidden or if reduced motion) ──
@@ -1689,6 +1782,8 @@ function bindEvents() {
     dom.scrim.addEventListener('click', () => closePanel());
     dom.newBtn.addEventListener('click', newChat);
     dom.voiceModeBtn.addEventListener('click', cycleVoiceMode);
+    dom.wakeBtn.addEventListener('click', () => setWake(!state.wake));
+    dom.moreWake.addEventListener('click', () => setWake(!state.wake));
     dom.stopBtn.addEventListener('click', stopSpeaking);
     dom.lockBtn.addEventListener('click', () => {
         state.token = '';
@@ -1706,8 +1801,8 @@ function bindEvents() {
         if (e.key === '/' && !typing && !state.authNeeded) { e.preventDefault(); dom.userInput.focus(); }
     });
     document.addEventListener('visibilitychange', () => {
-        if (document.hidden) stopOrb();
-        else { startOrb(); document.title = state.baseTitle; checkForUpdate(); if (state.conn === 'offline' || state.conn === 'reconnecting') connect(); }
+        if (document.hidden) { stopOrb(); stopWake(); }
+        else { startOrb(); resumeWake(); document.title = state.baseTitle; checkForUpdate(); if (state.conn === 'offline' || state.conn === 'reconnecting') connect(); }
     });
     window.addEventListener('online', () => { if (!state.authNeeded) connect(); });
     try {
@@ -1750,6 +1845,8 @@ function init() {
     applyVoiceMode();
     bindEvents();
     initVoice();
+    paintWake();
+    if (state.wake) resumeWake(1200);
     syncDrawerA11y();
     updateInstallUI();
     registerServiceWorker();
