@@ -96,8 +96,13 @@ async def test_it_reports_overdue_today_and_soon_for_payments_and_tasks(store, s
     await workspace.create_task(store, settings, title="File the report", due=day(settings, -1))
     await workspace.create_task(store, settings, title="Call the vendor", due=day(settings, 0))
     await workspace.create_task(store, settings, title="Someday", due=day(settings, 9))
+    await store.execute("INSERT INTO reminders (title, due_at, status, session_id, created_at) VALUES (?, ?, 'pending', 's', ?)",
+                        ("Water the plants", (timeutil.now(settings).replace(hour=23, minute=30)).isoformat(), "2026-01-01"))
+    await store.execute("INSERT INTO reminders (title, due_at, status, session_id, created_at) VALUES (?, ?, 'pending', 's', ?)",
+                        ("Not today", (timeutil.now(settings) + timedelta(days=3)).isoformat(), "2026-01-01"))
     _, body = await digest.compose(store, settings)
     lines = body.splitlines()
+    assert any(ln.startswith("Reminders today: 23:30 Water the plants") for ln in lines) and "Not today" not in body
     assert lines[0].startswith("Overdue: ") and "Sofa loan" in lines[0]
     assert any(ln.startswith("Due today: ₹1,200") and "Card bill" in ln for ln in lines)
     assert any(ln.startswith("Next 3 days: 1 payment, ₹800") for ln in lines)

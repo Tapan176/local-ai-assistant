@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -82,11 +83,33 @@ class AgentOrchestrator:
                         "steps": summarize_steps(result.steps),
                     },
                 )
-            logger.warning("No LLM answer available; using legacy offline pipeline")
+            logger.warning("No LLM answer available; answering in basic mode (the legacy pipeline is not used: it writes to old tables)")
+            return await self._basic_mode(session_id, user_text)
 
         response = await self.legacy.handle_user_input(session_id, user_text)
         response.debug.setdefault("mode", "legacy")
         return response
+
+    async def _basic_mode(self, session_id: str, user_text: str) -> OrchestratorResponse:
+        """The AI model could not be reached. Say so plainly, with the reason, and do only what is safe without it.
+
+        The old rule-based pipeline is deliberately NOT used here: it answers with confident nonsense, files "add task buy milk" as a
+        reminder with no date, reads times in the wrong time zone and books "I spent 500 on lunch" against a legacy bank account.
+        A wrong answer that changes your data is worse than an honest "I cannot right now"."""
+        llm = getattr(self.agent, "llm", None)
+        why = llm.explain_failure() if llm is not None and hasattr(llm, "explain_failure") else ""
+        head = "I can't use my AI model right now, so I'm in basic mode and I have not changed anything." + (f" {why}" if why else "")
+        if _BRIEF_RE.search(user_text):
+            try:
+                title, body = await digest.compose(self.agent.store, self.settings)
+                text = f"{head}\n\nHere is your day, from your own data:\n{title}\n{body}"
+            except Exception:
+                logger.exception("Basic-mode briefing failed")
+                text = head
+        else:
+            text = (f"{head}\n\nYour reminders will still fire and the Today, Money, Work and Growth screens still work. "
+                    "Please try this again in a few minutes.")
+        return OrchestratorResponse(session_id=session_id, text=text, action_type="respond", tool_used=None, debug={"mode": "legacy", "basic": True})
 
     async def _remember_turn(self, session_id: str, user_text: str, assistant_text: str, steps: list) -> None:
         try:
@@ -101,6 +124,9 @@ class AgentOrchestrator:
             )
         except Exception:
             logger.exception("Could not persist conversation turn")
+
+
+_BRIEF_RE = re.compile(r"\b(brief(?:ing)?|my day|today'?s (?:plan|agenda)|agenda|what'?s due|what do i have)\b", re.IGNORECASE)
 
 
 class ReminderScheduler:

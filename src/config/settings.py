@@ -79,6 +79,7 @@ class Settings(BaseModel):
         default="deepseek/deepseek-v4.1-flash",
         description="Fallback OpenRouter model (different vendor, cheaper)",
     )
+    openrouter_free_model: str = Field(default="openrouter/free", description="Last-resort OpenRouter model, tried only after the paid ones fail (the free router picks an available free model; blank = none)")
     openrouter_timeout: int = Field(default=60, description="OpenRouter timeout in seconds")
     vision_model: str = Field(default="google/gemini-2.5-flash-lite", description="Model that reads pictures sent in chat (cheap, good at receipts and documents); the primary model is the fallback")
     vision_daily_limit: int = Field(default=60, ge=0, le=5000, description="Picture requests allowed per day (0 switches pictures off)")
@@ -199,6 +200,7 @@ class Settings(BaseModel):
             "openrouter_fallback_model": os.getenv(
                 "TAPAN_OPENROUTER_FALLBACK_MODEL", "deepseek/deepseek-v4.1-flash"
             ),
+            "openrouter_free_model": os.getenv("TAPAN_OPENROUTER_FREE_MODEL", "openrouter/free"),
             "openrouter_timeout": int(os.getenv("TAPAN_OPENROUTER_TIMEOUT", "60")),
             "vision_model": os.getenv("TAPAN_VISION_MODEL", "google/gemini-2.5-flash-lite"),
             "vision_daily_limit": int(os.getenv("TAPAN_VISION_DAILY_LIMIT", "60")),

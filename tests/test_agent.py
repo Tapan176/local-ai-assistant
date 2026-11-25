@@ -410,12 +410,15 @@ def test_rate_limit(settings):
     assert codes == [200, 200, 429]
 
 
-async def test_facade_uses_agent_then_falls_back_to_legacy(settings, store):
+async def test_facade_uses_agent_then_answers_honestly_in_basic_mode(settings, store):
     from src.agent.service import AgentOrchestrator
     from src.models import OrchestratorResponse
 
     class Legacy:
+        called = 0
+
         async def handle_user_input(self, session_id, user_text):
+            Legacy.called += 1
             return OrchestratorResponse(session_id=session_id, text="legacy says hi", action_type="respond")
 
     class Episodic:
@@ -434,7 +437,9 @@ async def test_facade_uses_agent_then_falls_back_to_legacy(settings, store):
 
         llm.replies = [None]  # provider outage
         second = await facade.handle_user_input("s", "hello again")
-        assert second.text == "legacy says hi" and second.debug["mode"] == "legacy"
+        assert second.debug["mode"] == "legacy" and second.debug.get("basic") is True
+        assert "basic mode" in second.text and "not changed anything" in second.text and "legacy says hi" not in second.text
+        assert Legacy.called == 0                                   # the old pipeline writes to old tables and guesses: never used when the AI is down
 
 
 # ── regression: parallel tool calls share one SQLite connection ─────

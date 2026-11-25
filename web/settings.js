@@ -123,6 +123,7 @@
                 ['Provider', `${llm.provider} · ${llm.model}`],
                 ['Last answer from', llm.last_ok_at ? `${llm.last_provider} (${ago(llm.last_ok_at)})` : 'nothing yet'],
                 ['Calls · ok · failed', `${llm.calls} · ${llm.ok} · ${llm.failed}`],
+                llm.problem ? ['What is wrong', llm.problem, 'bad'] : null,
                 llm.last_error ? ['Last error', llm.last_error, 'bad'] : null,
             ]));
 

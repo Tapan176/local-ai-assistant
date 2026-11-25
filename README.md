@@ -169,6 +169,19 @@ your life and how they connect ("Zorya works at Quillon Labs", "Quillon Labs is 
   a Neo4j backend could replace it later without touching the assistant; for one person's life a hosted graph database adds a service
   to run and a size limit, and buys nothing at this scale.
 
+## When the AI model is unavailable
+
+If OpenRouter refuses requests (most often **402: out of credit**, also a rejected key, rate limits or an outage) the assistant now:
+
+- tries a **free model** as a last resort (`TAPAN_OPENROUTER_FREE_MODEL`, default `openrouter/free`; blank turns it off), and asks for a smaller reply when the balance is low but not empty;
+- stops retrying a provider that said "no credit" or "bad key" for 10 to 15 minutes, so replies are not slowed by failing calls;
+- tells you **why** in plain words in the chat and on *Settings → Status*, instead of guessing;
+- answers in an honest **basic mode**: it says nothing was changed, and still gives your day (due EMIs, tasks, reminders) when you ask for a briefing.
+
+The old rule-based pipeline is no longer used as a fallback for a real provider: it guessed, filed "add task buy milk" as a dateless reminder,
+read times in the wrong time zone and booked "I spent 500 on lunch" against a legacy bank account. It stays only for `TAPAN_LLM_PROVIDER=mock` (offline development).
+Reminders, push, Telegram and the daily briefing never needed the AI model, so they keep working.
+
 ## Daily briefing
 
 *Settings → Daily briefing*: one short message each morning at the time you choose, with what needs attention today: overdue and due EMIs

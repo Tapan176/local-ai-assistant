@@ -119,6 +119,15 @@ async def compose(store: Any, settings: Settings) -> tuple[str, str]:
     if todays:
         lines.append(f"Tasks today: {_titles(todays)}")
 
+    rows = await store.fetchall("SELECT title, due_at FROM reminders WHERE status = 'pending' AND due_at IS NOT NULL ORDER BY due_at LIMIT 300")
+    today_reminders = []
+    for r in rows:
+        due = timeutil.as_aware(r["due_at"], settings)
+        if due is not None and due.astimezone(now.tzinfo).date() == today:
+            today_reminders.append(f"{due.astimezone(now.tzinfo):%H:%M} {r['title']}")
+    if today_reminders:
+        lines.append(f"Reminders today: {_titles(today_reminders)}")
+
     title = f"Good morning · {now:%a} {now.day} {now:%b}"
     return title, "\n".join(lines) if lines else "Nothing due today. Enjoy the day."
 

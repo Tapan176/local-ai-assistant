@@ -175,7 +175,7 @@ def register(app: FastAPI, *, runtime: Any, settings: Settings, require_auth: Ca
                 "environment": settings.environment, "database": "postgres" if settings.database_url else "sqlite",
                 "python": platform.python_version(), "now": now.isoformat(timespec="seconds"), "timezone": settings.timezone or "system",
             },
-            "llm": {"provider": settings.llm_provider, "model": settings.openrouter_model, **(chat.stats if chat else {})},
+            "llm": {"provider": settings.llm_provider, "model": settings.openrouter_model, **(chat.stats if chat else {}), "problem": chat.explain_failure() if chat and hasattr(chat, "explain_failure") else ""},
             "scheduler": {
                 **(scheduler.stats if scheduler else {}), "poll_seconds": settings.reminder_poll_seconds,
                 "pending": len(dues), "overdue_pending": overdue, "next_due": upcoming.isoformat(timespec="minutes") if upcoming else None,

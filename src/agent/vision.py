@@ -111,7 +111,8 @@ async def describe(chat_client: Any, store: Any, settings: Settings, images: lis
     result = await chat_client.complete_vision(messages, max_tokens=700)
     text = str(result.content or "").strip() if result is not None else ""
     if not text:
-        raise VisionError("I could not read that picture right now (the vision model did not answer). Try again in a moment.")
+        why = chat_client.explain_failure() if hasattr(chat_client, "explain_failure") else ""
+        raise VisionError("I could not read that picture right now." + (f" {why}" if why else " The vision model did not answer. Try again in a moment."))
     return text[:MAX_DIGEST_CHARS]
 
 

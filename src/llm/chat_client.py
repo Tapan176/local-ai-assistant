@@ -30,6 +30,10 @@ logger = logging.getLogger(__name__)
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 _COOLDOWN_SECONDS = 60.0
+# A provider that says "no credit" or "bad key" will keep saying it: do not try it on every message (each try costs the user seconds).
+_LONG_COOLDOWN = {401: 900.0, 402: 600.0, 403: 900.0}
+DEFAULT_MAX_TOKENS = 2048          # replies and tool calls are short; without a limit OpenRouter reserves the model's maximum and answers 402 to a small balance
+_AFFORD_RE = re.compile(r"can only afford (\d+)", re.IGNORECASE)
 
 
 @dataclass(slots=True)
@@ -74,6 +78,7 @@ class ChatClient:
         self.last_provider: str = ""
         self.stats: dict[str, Any] = {"calls": 0, "ok": 0, "failed": 0, "last_ok_at": None, "last_error": None,
                                       "last_provider": "", "last_model": ""}
+        self._failures: dict[str, str] = {}      # model key -> kind of its latest failure; cleared by any success, read by explain_failure()
 
     # ── lifecycle ───────────────────────────────────────────────────
     async def aclose(self) -> None:
@@ -107,7 +112,7 @@ class ChatClient:
                 name="openrouter",
                 url=s.openrouter_url,
                 api_key=s.openrouter_api_key,
-                models=[m for m in (s.openrouter_model, s.openrouter_fallback_model) if m],
+                models=[m for m in dict.fromkeys((s.openrouter_model, s.openrouter_fallback_model, s.openrouter_free_model)) if m],
                 timeout=float(s.openrouter_timeout),
                 headers={"HTTP-Referer": "https://tapan-ai.local", "X-Title": "TAPAN_AI"},
             )
@@ -128,6 +133,37 @@ class ChatClient:
         """True if at least one *remote/explicit* provider is set up (Ollama alone is best-effort)."""
         return any(e.name != "ollama" for e in self.endpoints()) or self.settings.llm_provider.lower() == "ollama"
 
+    # ── failure bookkeeping ─────────────────────────────────────────
+    def _record_failure(self, key: str, exc: Exception) -> None:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status in (401, 402, 403):
+            kind = {401: "key", 402: "credit", 403: "key"}[status]
+        elif status == 429:
+            kind = "rate"
+        elif isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.PoolTimeout)):
+            kind = "network"
+        else:
+            kind = "other"
+        self._failures[key] = kind
+        self.stats["last_error"] = f"{key}: {type(exc).__name__}{f' {status}' if status else ''}: {str(exc)[:160]}"
+        self._cooldown[key] = time.monotonic() + _LONG_COOLDOWN.get(status or 0, _COOLDOWN_SECONDS)
+
+    def explain_failure(self) -> str:
+        """Why the last attempt to reach a model failed, in words the owner can act on. '' when nothing has failed."""
+        kinds = {k for key, k in self._failures.items() if not key.startswith("ollama:")} or set(self._failures.values())
+        if "credit" in kinds:
+            return ("The AI provider (OpenRouter) says the account is out of credit. Add a little credit at openrouter.ai/credits, "
+                    "or set TAPAN_OPENROUTER_MODEL to a free model.")
+        if "key" in kinds:
+            return "The AI provider rejected the API key. It may have been rotated or revoked: set a new TAPAN_OPENROUTER_API_KEY."
+        if "rate" in kinds:
+            return "The AI provider is rate limiting requests right now. It usually clears within a minute."
+        if "network" in kinds:
+            return "I could not reach the AI provider (network problem). It usually comes back on its own."
+        if kinds:
+            return "The AI provider returned errors for every model I tried."
+        return ""
+
     # ── public API ──────────────────────────────────────────────────
     async def complete(
         self,
@@ -147,10 +183,10 @@ class ChatClient:
                     result = await self._call(endpoint, model, key, messages, tools, temperature, json_mode)
                 except Exception as exc:  # network error, 4xx/5xx, bad payload
                     logger.warning("LLM %s failed: %s", key, exc)
-                    self.stats["last_error"] = f"{key}: {type(exc).__name__}: {str(exc)[:160]}"
-                    self._cooldown[key] = time.monotonic() + _COOLDOWN_SECONDS
+                    self._record_failure(key, exc)
                     continue
                 if result is not None:
+                    self._failures.clear()
                     self.last_provider = endpoint.name
                     self.stats.update(ok=self.stats["ok"] + 1, last_provider=endpoint.name, last_model=model, last_error=None,
                                       last_ok_at=datetime.now(timezone.utc).isoformat())
@@ -182,10 +218,10 @@ class ChatClient:
                     content = _THINK_RE.sub("", str(((choices[0] if choices else {}).get("message") or {}).get("content") or "")).strip()
                 except Exception as exc:  # network error, a model that cannot take pictures (400/404), bad payload
                     logger.warning("LLM %s failed on a picture: %s", key, type(exc).__name__)
-                    self.stats["last_error"] = f"{key}: {type(exc).__name__}: {str(exc)[:160]}"
-                    self._cooldown[key] = time.monotonic() + _COOLDOWN_SECONDS
+                    self._record_failure(key, exc)
                     continue
                 if content:
+                    self._failures.clear()
                     self.stats.update(ok=self.stats["ok"] + 1, last_provider=endpoint.name, last_model=model, last_error=None,
                                       last_ok_at=datetime.now(timezone.utc).isoformat())
                     return ChatResult(content=content, tool_calls=[], provider=endpoint.name, model=model)
@@ -245,7 +281,7 @@ class ChatClient:
         temperature: float,
         json_mode: bool,
     ) -> dict[str, Any]:
-        payload: dict[str, Any] = {"model": model, "messages": messages, "temperature": temperature}
+        payload: dict[str, Any] = {"model": model, "messages": messages, "temperature": temperature, "max_tokens": DEFAULT_MAX_TOKENS}
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
@@ -258,6 +294,13 @@ class ChatClient:
         if endpoint.api_key:
             headers["Authorization"] = f"Bearer {endpoint.api_key}"
         response = await self._http().post(endpoint.url, headers=headers, json=payload, timeout=endpoint.timeout)
+        if response.status_code == 402:
+            # "...but can only afford N": the balance is small, not empty. Ask for less instead of giving up.
+            m = _AFFORD_RE.search(response.text or "")
+            affordable = int(m.group(1)) - 20 if m else 0
+            if affordable >= 256 and affordable < int(payload.get("max_tokens") or 0):
+                logger.info("%s: balance only covers %d tokens; retrying with that limit", endpoint.name, affordable)
+                response = await self._http().post(endpoint.url, headers=headers, json={**payload, "max_tokens": affordable}, timeout=endpoint.timeout)
         response.raise_for_status()
         return response.json()
 
