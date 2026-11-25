@@ -276,6 +276,10 @@ class PushService:
         """Signs notification buttons. Derived from the VAPID key, so it needs no extra secret and survives restarts."""
         return ActionSigner(b64d(await self._private_key()), b"tapan-action-push")
 
+    async def notify_digest(self, title: str, body: str) -> dict[str, int]:
+        """The morning briefing: one message, normal urgency, kept for six hours if the phone is off."""
+        return await self.send({"title": title, "body": _clip(body, 400), "tag": "daily-digest", "url": "/web/index.html?panel=today"}, ttl=6 * 3600, urgency="normal")
+
     async def notify_reminders(self, rows: list[dict[str, Any]], now: datetime) -> dict[str, int]:
         total = {"sent": 0, "removed": 0, "failed": 0}
         signer = None

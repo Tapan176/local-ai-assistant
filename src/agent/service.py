@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any
 
-from src.agent import recurrence, timeutil, vision
+from src.agent import digest, recurrence, timeutil, vision
 from src.agent.loop import AgentLoop, EventCallback, summarize_steps
 from src.config.settings import Settings
 from src.core.orchestrator import Orchestrator
@@ -110,6 +111,8 @@ class ReminderScheduler:
         self.settings = settings
         self.push = push
         self._task: asyncio.Task | None = None
+        self._digest_config: dict[str, Any] = {"enabled": False, "time": "08:00"}
+        self._digest_checked = float("-inf")
         # Heartbeat shown on the Status screen: lets you tell "server was asleep" from "scheduler is broken".
         self.stats: dict[str, Any] = {"started_at": datetime.now(timezone.utc).isoformat(), "ticks": 0, "last_tick_at": None,
                                       "fired_total": 0, "last_fired_at": None, "errors": 0, "last_error": None}
@@ -135,7 +138,19 @@ class ReminderScheduler:
                 self.stats["errors"] += 1
                 self.stats["last_error"] = f"{type(exc).__name__}: {exc}"[:300]
                 logger.exception("Reminder scheduler tick failed")
+            await self._digest()
             await asyncio.sleep(self.settings.reminder_poll_seconds)
+
+    async def _digest(self) -> None:
+        """The morning briefing, if it is switched on and due. The setting is cached for a minute: reading it every 20 s is a wasted round trip."""
+        try:
+            if time.monotonic() - self._digest_checked > 60:
+                self._digest_config = await digest.get_config(self.store)
+                self._digest_checked = time.monotonic()
+            if self._digest_config["enabled"] and await digest.send_if_due(self.store, self.settings, self.push, self._digest_config):
+                self.stats["digest_sent_at"] = datetime.now(timezone.utc).isoformat()
+        except Exception:
+            logger.exception("Daily briefing failed")
 
     async def tick(self) -> int:
         """Fire every pending reminder whose time has come. Returns how many fired."""

@@ -1876,6 +1876,42 @@ const authed = (t, s = t.sockets[t.sockets.length - 1]) => { t.open(s); t.say(s,
     check("wake: a blocked microphone switches it off and says why", w3.S().wake === false && /blocked/i.test(w3.$("toast").textContent) && w3.w.localStorage.getItem("tapan.wake") === "off");
   }
 
+  // ── Daily briefing (Settings) ─────────────────────────────────────
+  {
+    let cfg = { enabled: false, time: "08:00", timezone: "Asia/Kolkata", preview: { title: "Good morning · Wed 25 Nov", body: "Due today: ₹1,200 (Card bill)" } };
+    const puts = [], tests = [];
+    const dg = boot({ drawer: true, routes: m0Routes({
+      "GET /api/digest": () => cfg,
+      "PUT /api/digest": (url) => { return cfg; },
+      "POST /api/digest/test": () => { tests.push(1); return { title: "Good morning", delivery: { push: { sent: 1, removed: 0, failed: 0 } } }; },
+    }) });
+    const realFetch = dg.w.fetch;
+    dg.w.fetch = async (url, opts = {}) => {
+      if ((opts.method || "GET").toUpperCase() === "PUT" && /\/api\/digest$/.test(url)) { const body = JSON.parse(opts.body); puts.push(body); cfg = { ...cfg, ...body }; return { ok: true, status: 200, json: async () => body }; }
+      return realFetch(url, opts);
+    };
+    authed(dg); await wait(40);
+    dg.$("today-btn").click(); dg.$("tab-settings").click(); await wait(120);
+    const sec = [...dg.$("panel-settings").querySelectorAll("details")].find((d) => d.dataset.id === "daily-digest");
+    check("digest: Settings has a Daily briefing section", !!sec);
+    sec.open = true; sec.dispatchEvent(new dg.w.Event("toggle")); await wait(120);
+    const body = sec.querySelector(".set-body");
+    check("digest: it explains itself, says no AI guessing, and starts off", /no AI guessing/.test(body.textContent) && body.querySelector("#digest-on").checked === false);
+    check("digest: the checkbox and the time field are labelled", body.querySelector("label[for=digest-on]") && body.querySelector("label[for=digest-time]") && /Asia\/Kolkata/.test(body.querySelector("label[for=digest-time]").textContent) && body.querySelector("#digest-time").type === "time");
+    check("digest: it previews what the message would say right now", /Good morning · Wed 25 Nov/.test(body.querySelector(".digest-preview").textContent) && /Card bill/.test(body.querySelector(".digest-preview").textContent));
+    body.querySelector("#digest-on").checked = true; body.querySelector("#digest-time").value = "07:15";
+    body.querySelector("form").dispatchEvent(new dg.w.Event("submit", { bubbles: true, cancelable: true })); await wait(80);
+    check("digest: saving sends the switch and the time and confirms in words", puts.length === 1 && puts[0].enabled === true && puts[0].time === "07:15" && /every day at 07:15|at 07:15/.test(body.textContent));
+    [...body.querySelectorAll("button")].find((b) => /send it to me now/i.test(b.textContent)).click(); await wait(80);
+    check("digest: 'Send it to me now' posts a test and says it was sent", tests.length === 1 && /Sent\. Check your phone/.test(body.textContent));
+    check("digest: the section script does not inject HTML", !/innerHTML|insertAdjacentHTML|outerHTML/.test(memoryJs));
+    // the open app shows a briefing as a message, and never reads it out loud as a reminder
+    const nb = boot({ routes: m0Routes({ "GET /api/notifications": { notifications: [{ id: 5, kind: "digest", title: "Good morning · Wed 25 Nov", body: "Due today: ₹1,200 (Card bill)", created_at: new Date().toISOString() }] } }) });
+    authed(nb); await wait(80);
+    const shown = nb.chat().textContent;
+    check("digest: a briefing notification appears in the chat as itself, not as a 'Reminder'", /Good morning · Wed 25 Nov/.test(shown) && /Card bill/.test(shown) && !/Reminder:/.test(shown) && nb.spoken.length === 0);
+  }
+
   console.log(failures ? `\n${failures} FAILED` : "\nALL UI TESTS PASSED");
   process.exit(failures ? 1 : 0);
 })();

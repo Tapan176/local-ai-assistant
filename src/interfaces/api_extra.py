@@ -13,6 +13,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.agent import actions, timeutil, weather
+from src.agent import digest, expenses
 from src.agent import export as data_export
 from src.config.settings import Settings
 from src.interfaces import api_expenses, api_graph, api_telegram, api_workspace
@@ -24,6 +25,12 @@ class PushActionBody(BaseModel):
     r: int
     m: int
     s: str = Field(max_length=64)
+
+
+class DigestIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+    time: str = Field(max_length=5)
 
 
 class ClientReport(BaseModel):
@@ -60,6 +67,26 @@ def register(app: FastAPI, *, runtime: Any, settings: Settings, require_auth: Ca
     api_expenses.register(app, runtime=runtime, settings=settings, require_auth=require_auth, limiter=limiter)
     api_workspace.register(app, runtime=runtime, settings=settings, require_auth=require_auth, limiter=limiter)
     api_graph.register(app, runtime=runtime, settings=settings, require_auth=require_auth, limiter=limiter)
+
+    @app.get("/api/digest", dependencies=[Depends(require_auth)])
+    async def digest_get() -> dict[str, Any]:
+        title, body = await digest.compose(store, settings)
+        return {**await digest.get_config(store), "timezone": settings.timezone, "preview": {"title": title, "body": body}}
+
+    @app.put("/api/digest", dependencies=[Depends(require_auth)])
+    async def digest_set(body: DigestIn) -> dict[str, Any]:
+        try:
+            return await digest.set_config(store, body.enabled, body.time)
+        except expenses.ExpenseError as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from None
+
+    @app.post("/api/digest/test")
+    async def digest_test(client_key: str = Depends(require_auth)) -> dict[str, Any]:
+        """Send the briefing right now to every channel (does not count as today's briefing)."""
+        if not limiter.allow(f"digest-test:{client_key}"):
+            raise HTTPException(status_code=429, detail="Too many test briefings. Wait a minute.")
+        sent = await digest.deliver(store, settings, getattr(getattr(runtime, "scheduler", None), "push", None))
+        return {"title": sent["title"], "delivery": sent["delivery"]}
 
     @app.get("/api/export", dependencies=[Depends(require_auth)])
     async def export_everything() -> dict[str, Any]:

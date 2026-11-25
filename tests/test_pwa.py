@@ -121,3 +121,14 @@ def test_the_running_app_serves_the_pwa_files_with_the_right_types(client):
     assert client.get("/web/manifest.webmanifest").json()["id"] == "/web/"
     # the service worker lives inside the manifest scope, so it is allowed to control the app
     assert "/web/sw.js".startswith(MANIFEST["scope"])
+
+
+def test_install_dialog_has_screenshots_of_the_declared_sizes_and_the_logo_mark_is_cached_offline():
+    shots = MANIFEST.get("screenshots", [])
+    assert {s["form_factor"] for s in shots} == {"narrow", "wide"}, "Chrome's richer install sheet needs a phone and a wide screenshot"
+    for shot in shots:
+        path = WEB / shot["src"].split("?")[0]
+        assert path.exists(), shot["src"]
+        w, h = png_size(path)
+        assert f"{w}x{h}" == shot["sizes"] and shot["label"]
+    assert (WEB / "mark.svg").exists() and '"mark.svg"' in (WEB / "sw.js").read_text(encoding="utf-8")

@@ -20,6 +20,10 @@
     { "src": "icons/icon-maskable-512.png?v=2", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
     { "src": "icon.svg?v=2", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
   ],
+  "screenshots": [
+    { "src": "icons/shot-narrow.png?v=2", "sizes": "540x960", "type": "image/png", "form_factor": "narrow", "label": "Chat, with shortcuts for the day" },
+    { "src": "icons/shot-wide.png?v=2", "sizes": "1280x720", "type": "image/png", "form_factor": "wide", "label": "Chat and today's reminders side by side" }
+  ],
   "shortcuts": [
     {
       "name": "New chat",

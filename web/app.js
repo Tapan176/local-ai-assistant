@@ -1000,6 +1000,10 @@ async function pollNotifications() {
         for (const n of notifications) {
             state.lastNotificationId = Math.max(state.lastNotificationId, n.id);
             store('tapan.lastNotification', String(state.lastNotificationId));
+            if (n.kind === 'digest') {                       // the morning briefing: shown as a message, never read aloud, not a reminder
+                addMessage(`**${n.title}**\n${n.body}`, 'assistant', { ts: n.created_at, note: 'briefing' });
+                continue;
+            }
             addMessage(`**Reminder:** ${n.body}`, 'assistant', { ts: n.created_at, note: 'reminder' });
             spoken.push(n.body);
             // With push on, the service worker already shows this on the lock screen: a second one would be a duplicate buzz.

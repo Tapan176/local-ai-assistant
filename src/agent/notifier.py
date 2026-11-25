@@ -25,3 +25,15 @@ class Notifier:
             else:
                 result[name] = outcome
         return result
+
+    async def notify_digest(self, title: str, body: str) -> dict[str, Any]:
+        names = list(self.channels)
+        outcomes = await asyncio.gather(*(self.channels[n].notify_digest(title, body) for n in names if hasattr(self.channels[n], "notify_digest")), return_exceptions=True)
+        result: dict[str, Any] = {}
+        for name, outcome in zip([n for n in names if hasattr(self.channels[n], "notify_digest")], outcomes):
+            if isinstance(outcome, Exception):
+                logger.error("Digest channel %s failed: %s", name, type(outcome).__name__)
+                result[name] = {"sent": 0, "removed": 0, "failed": 1, "error": type(outcome).__name__}
+            else:
+                result[name] = outcome
+        return result

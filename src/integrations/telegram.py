@@ -242,6 +242,17 @@ class TelegramBridge:
         self.stats["last_error"] = None
         return len(chunks)
 
+    async def notify_digest(self, title: str, body: str) -> dict[str, int]:
+        result = {"sent": 0, "removed": 0, "failed": 0}
+        if not await self.configured() or not await self.linked_chat():
+            return result
+        try:
+            await self.send(f"☀️ {title}\n{body}")
+            result["sent"] = 1
+        except TelegramError:
+            result["failed"] = 1
+        return result
+
     async def notify_reminders(self, rows: list[dict[str, Any]], now: datetime) -> dict[str, int]:
         result = {"sent": 0, "removed": 0, "failed": 0}
         if not await self.configured() or not await self.linked_chat():

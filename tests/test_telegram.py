@@ -522,3 +522,11 @@ def test_setup_attempts_are_rate_limited(served):
     client, fake, runtime = served
     codes = [client.post("/api/telegram/token", json={"token": "x"}).status_code for _ in range(40)]
     assert 429 in codes and codes[0] == 400
+
+
+async def test_the_morning_briefing_reaches_telegram_only_once_linked(bridge, api_fake):
+    assert await bridge.notify_digest("Good morning · Wed 25 Nov", "Due today: ₹1,200") == {"sent": 0, "removed": 0, "failed": 0} and api_fake.calls == []
+    await linked(bridge, api_fake)
+    api_fake.calls.clear()
+    assert (await bridge.notify_digest("Good morning · Wed 25 Nov", "Due today: ₹1,200"))["sent"] == 1
+    assert api_fake.of("sendMessage")[0]["text"] == "☀️ Good morning · Wed 25 Nov\nDue today: ₹1,200"

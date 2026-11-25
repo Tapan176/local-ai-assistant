@@ -477,3 +477,13 @@ def test_snooze_endpoint_is_rate_limited_and_respects_disabled_push(settings):
     runtime, client = _action_client(settings, push_enabled=False)
     with client as c:
         assert c.post("/api/push/action", json={"r": 1, "m": 10, "s": "x"}).status_code == 503
+
+
+async def test_the_morning_briefing_is_one_normal_urgency_notification_kept_for_six_hours(store, settings):
+    sender = FakeSender()
+    service = PushService(store, settings, sender=sender)
+    await service.subscribe(browser_subscription()[0])
+    assert await service.notify_digest("Good morning · Wed 25 Nov", "Due today: ₹1,200 (Card bill)") == {"sent": 1, "removed": 0, "failed": 0}
+    call = sender.calls[-1]
+    assert call["data"]["title"].startswith("Good morning") and call["data"]["tag"] == "daily-digest" and "actions" not in call["data"]
+    assert call["ttl"] == 6 * 3600 and call["urgency"] == "normal"

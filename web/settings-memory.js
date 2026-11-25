@@ -107,4 +107,48 @@
         container.append(btn, out);
     }
     register('your-data', 'Your data', renderData, { order: 40 });
+
+    // ── Daily briefing: one short morning message (EMIs due, overdue tasks) ───────
+    async function renderDigest(container) {
+        await guarded(container, async () => {
+            const d = await host().api('/api/digest');
+            container.replaceChildren();
+            container.appendChild(note('A short message each morning with what needs attention today: overdue and due EMIs, overdue and due tasks. It is built from your own data, '
+                + 'with no AI guessing, and goes to your phone notifications and Telegram (whichever you have set up) and shows in the chat. It is off until you turn it on.'));
+            const form = el('form', 'set-field');
+            const on = el('input'); on.type = 'checkbox'; on.checked = d.enabled; on.name = 'digest-on'; on.id = 'digest-on';
+            const onLabel = el('label', null, 'Send me a daily briefing'); onLabel.htmlFor = 'digest-on';
+            const at = el('input'); at.type = 'time'; at.value = d.time; at.name = 'digest-time'; at.id = 'digest-time'; at.required = true;
+            const atLabel = el('label', null, `Time (${d.timezone || 'your time zone'})`); atLabel.htmlFor = 'digest-time';
+            const out = note('');
+            const save = el('button', 'wide-btn', 'Save'); save.type = 'submit';
+            form.append(on, onLabel, atLabel, at, save);
+            form.addEventListener('submit', async (e) => {
+                e.preventDefault(); save.disabled = true;
+                try {
+                    const r = await host().api('/api/digest', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: on.checked, time: at.value }) });
+                    out.textContent = r.enabled ? `Saved. You will get it at ${r.time} every day.` : 'Saved. The daily briefing is off.'; out.className = 'set-note';
+                    host().toast(r.enabled ? 'Daily briefing is on' : 'Daily briefing is off');
+                } catch (err) { out.textContent = 'Could not save that. Check the time and try again.'; out.className = 'set-note bad'; }
+                save.disabled = false;
+            });
+            container.appendChild(form);
+            container.appendChild(el('p', 'set-note', 'What it would say right now:'));
+            const box = el('pre', 'digest-preview');
+            box.textContent = `${d.preview.title}\n${d.preview.body}`;
+            container.appendChild(box);
+            container.appendChild(button('Send it to me now', async (e) => {
+                const btn = e.currentTarget; btn.disabled = true;
+                try {
+                    const r = await host().api('/api/digest/test', { method: 'POST' });
+                    const sent = Object.values(r.delivery || {}).reduce((n, c) => n + ((c && c.sent) || 0), 0);
+                    out.textContent = sent ? 'Sent. Check your phone.' : 'Posted in the chat, but no phone or Telegram is set up to receive it (see Notifications and Telegram).';
+                    out.className = 'set-note';
+                } catch (err) { out.textContent = err && err.status === 429 ? 'Too many tests. Wait a minute.' : 'Could not send it. Try again.'; out.className = 'set-note bad'; }
+                btn.disabled = false;
+            }));
+            container.appendChild(out);
+        });
+    }
+    register('daily-digest', 'Daily briefing', renderDigest, { order: 25 });
 })();

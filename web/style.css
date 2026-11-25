@@ -901,7 +901,13 @@ h1 { font: 650 1.12rem/1 var(--font-ui); letter-spacing: -0.2px; display: flex; 
 .graph-edges li { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; overflow-wrap: anywhere; }
 
 /* ── Hey Tapan (hands-free switch) ────────────────────────── */
-#wake-btn .wake-waves { opacity: 0; transition: opacity 0.2s; }
 #wake-btn.active { color: var(--accent); background: rgba(var(--accent-rgb), 0.14); }
-#wake-btn.active .wake-waves { opacity: 1; }
 .more-item[aria-pressed="true"] small { color: var(--accent); }
+
+.digest-preview { white-space: pre-wrap; margin: 6px 0 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); font: inherit; overflow-wrap: anywhere; }
+
+/* One identity everywhere: the app icon's mark (orb, wave and ring) is the header light, the empty-state logo and the assistant's avatar */
+.orb, .empty-orb, .avatar { background: url("mark.svg") center / contain no-repeat; border: 0; box-shadow: none; filter: drop-shadow(0 6px 14px var(--accent-glow)); }
+.avatar { color: transparent; font-size: 0; }
+.empty-orb { width: 88px; height: 88px; }
+@keyframes orb-pulse { 50% { transform: scale(1.1); } }

@@ -169,6 +169,16 @@ your life and how they connect ("Zorya works at Quillon Labs", "Quillon Labs is 
   a Neo4j backend could replace it later without touching the assistant; for one person's life a hosted graph database adds a service
   to run and a size limit, and buys nothing at this scale.
 
+## Daily briefing
+
+*Settings → Daily briefing*: one short message each morning at the time you choose, with what needs attention today: overdue and due EMIs
+and payments, overdue and due tasks. It is built from your own data by fixed rules (no AI call, so it is instant, free and never invents
+anything). It goes to your phone notifications and Telegram (whichever are set up) and also appears in the chat. Off until you switch it on.
+
+- Sent at most once a day, even while two server instances overlap during a deploy.
+- If the server was asleep at the set time it still sends when it wakes, but only within four hours of that time; a missed day is skipped rather than sent at night.
+- *Send it to me now* tests the channels without using up today's briefing.
+
 ## Hey Tapan (hands-free, optional)
 
 Off by default. Turn it on from the **Hey Tapan** switch in the top bar (desktop) or *More* (phone); turn it off the same way. It is remembered per device.
