@@ -15,7 +15,7 @@ Constraints that shape every choice: one user, free tiers (Render free sleeps, S
 
 | Feature | What it does | Notes |
 |---|---|---|
-| Smart nudges | "Your Card bill is due in 2 days and HDFC is short by X", "You have not logged spending for 3 days" | Rules first (no AI call), reuses the daily-briefing machinery |
+| Smart nudges | "Your card bill is due in 2 days and your bank account is short by X", "You have not logged spending for 3 days" | Rules first (no AI call), reuses the daily-briefing machinery |
 | Weekly review | Sunday message: spending vs budget, tasks done, EMIs paid, one learning from the journal | Same engine as the daily briefing |
 | Evening wrap-up | "3 tasks still open, tomorrow has 2 EMIs" | Optional, off by default |
 | Anomaly alerts | A subscription price went up, a spend is 3x the usual for that category | Needs 2-3 months of data |
