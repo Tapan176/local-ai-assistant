@@ -77,6 +77,26 @@ def _parse_auth_frame(text: str) -> str | None:
     return None
 
 
+MAX_FRAME_CHARS = 7_000_000          # three shrunken pictures as base64 are about 2-4 MB; anything bigger is refused outright
+
+
+def _parse_message_frame(text: str) -> tuple[str, list[str]] | None:
+    """A chat message that carries pictures: {"type": "message", "text": "...", "images": ["data:image/jpeg;base64,..."]}.
+    Plain text frames (the normal case) return None."""
+    if not text.startswith("{") or '"message"' not in text[:60]:
+        return None
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or data.get("type") != "message":
+        return None
+    said, images = data.get("text", ""), data.get("images") or []
+    if isinstance(said, str) and isinstance(images, list) and all(isinstance(i, str) for i in images):
+        return said, images
+    return None
+
+
 def _token_matches(expected: str, provided: str | None) -> bool:
     return bool(provided) and hmac.compare_digest(expected.encode(), (provided or "").encode())
 
@@ -223,7 +243,15 @@ def create_api(
                     )
                     continue
 
-                result = await _handle(orchestrator, session_id, text, push)
+                images: list[str] = []
+                if len(text) > MAX_FRAME_CHARS:
+                    await ws.send_json({"type": "final", "text": "That message is too large. Send fewer or smaller pictures.", "action_type": "respond", "tool": None, "emotion": "neutral", "debug": {}}
+                                       if not stream else {"type": "complete", "action_type": "respond", "tool": None, "emotion": "neutral"})
+                    continue
+                framed = _parse_message_frame(text)
+                if framed is not None:
+                    text, images = framed
+                result = await _handle(orchestrator, session_id, text, push, images)
                 if stream:
                     async for chunk in stream_text(result.text, chunk_size=settings.stream_chunk_size):
                         await ws.send_json(jsonable_encoder({"type": "chunk", "content": chunk}))
@@ -396,8 +424,15 @@ def create_api(
     return app
 
 
-async def _handle(orchestrator: Any, session_id: str, text: str, push):
-    """Call the orchestrator, forwarding tool-progress events only if it supports them."""
-    if "on_event" in inspect.signature(orchestrator.handle_user_input).parameters:
-        return await orchestrator.handle_user_input(session_id=session_id, user_text=text, on_event=push)
-    return await orchestrator.handle_user_input(session_id=session_id, user_text=text)
+async def _handle(orchestrator: Any, session_id: str, text: str, push, images: list[str] | None = None):
+    """Call the orchestrator, forwarding tool-progress events (and pictures) only if it supports them."""
+    params = inspect.signature(orchestrator.handle_user_input).parameters
+    kwargs: dict[str, Any] = {"session_id": session_id, "user_text": text}
+    if "on_event" in params:
+        kwargs["on_event"] = push
+    if images:
+        if "images" not in params:
+            return type("Reply", (), {"text": "Pictures need an AI model, and none is set up on this server.", "action_type": "respond", "tool_used": None,
+                                       "emotional_state": "neutral", "debug": {"mode": "vision"}})()
+        kwargs["images"] = images
+    return await orchestrator.handle_user_input(**kwargs)

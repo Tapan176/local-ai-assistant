@@ -158,6 +158,40 @@ class ChatClient:
         self.stats["failed"] += 1
         return None
 
+    async def complete_vision(self, messages: list[dict[str, Any]], max_tokens: int = 700) -> ChatResult | None:
+        """Like ``complete`` but for messages that carry pictures, using the vision model first and the primary model as a fallback.
+        Only providers that can take pictures are tried (OpenRouter and OmniRoute); a local text-only model is skipped."""
+        s = self.settings
+        self.stats["calls"] += 1
+        for endpoint in self.endpoints():
+            if endpoint.name == "openrouter":
+                models = [m for m in dict.fromkeys((s.vision_model, s.openrouter_model)) if m]
+            elif endpoint.name == "omniroute":
+                models = [s.omniroute_model]
+            else:
+                continue
+            for model in models:
+                key = f"{endpoint.name}:{model}:vision"
+                if self._cooldown.get(key, 0.0) > time.monotonic():
+                    continue
+                try:
+                    payload = self._payload(model, messages, None, 0.2, False)
+                    payload["max_tokens"] = max_tokens
+                    data = await self._post(endpoint, payload)
+                    choices = data.get("choices") or []
+                    content = _THINK_RE.sub("", str(((choices[0] if choices else {}).get("message") or {}).get("content") or "")).strip()
+                except Exception as exc:  # network error, a model that cannot take pictures (400/404), bad payload
+                    logger.warning("LLM %s failed on a picture: %s", key, type(exc).__name__)
+                    self.stats["last_error"] = f"{key}: {type(exc).__name__}: {str(exc)[:160]}"
+                    self._cooldown[key] = time.monotonic() + _COOLDOWN_SECONDS
+                    continue
+                if content:
+                    self.stats.update(ok=self.stats["ok"] + 1, last_provider=endpoint.name, last_model=model, last_error=None,
+                                      last_ok_at=datetime.now(timezone.utc).isoformat())
+                    return ChatResult(content=content, tool_calls=[], provider=endpoint.name, model=model)
+        self.stats["failed"] += 1
+        return None
+
     # ── internals ───────────────────────────────────────────────────
     async def _call(
         self,

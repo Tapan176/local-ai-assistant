@@ -72,6 +72,7 @@ const dom = {};
 function bindDom() {
     Object.assign(dom, {
         app: $('app'), chat: $('chat-history'), empty: $('empty-state'), greeting: $('greeting'),
+        attachBtn: $('attach-btn'), fileInput: $('file-input'), tray: $('attach-tray'),
         userInput: $('user-input'), sendBtn: $('send-btn'), voiceBtn: $('voice-toggle'), composer: $('composer'),
         pill: $('conn-pill'), statusText: document.querySelector('.status-text'),
         jump: $('jump-btn'), jumpLabel: $('jump-label'), toast: $('toast'), scrim: $('scrim'),
@@ -353,9 +354,16 @@ function addMessage(text, role, opts = {}) {
     row.setAttribute('aria-label', `${role === 'user' ? 'You' : 'Tapan'}, ${fmtTime(when)}`);
     if (role === 'assistant') { const av = h('div', 'avatar', 'T'); av.setAttribute('aria-hidden', 'true'); row.appendChild(av); }
     const body = h('div', 'msg-body');
-    const bubble = h('div', 'bubble');
-    renderInto(bubble, text, role);
-    body.appendChild(bubble);
+    if ((opts.images || []).length) {
+        const pics = h('div', 'msg-images');
+        opts.images.forEach((src, i) => { const img = h('img'); img.src = src; img.alt = `Picture ${i + 1} you attached`; img.addEventListener('load', () => { if (stick) scrollToBottom(); }); pics.appendChild(img); });
+        body.appendChild(pics);
+    }
+    if (text) {
+        const bubble = h('div', 'bubble');
+        renderInto(bubble, text, role);
+        body.appendChild(bubble);
+    }
 
     const meta = h('div', 'meta');
     const time = h('time', null, fmtTime(when));
@@ -363,12 +371,14 @@ function addMessage(text, role, opts = {}) {
     meta.appendChild(time);
     (opts.tools || []).forEach((t) => meta.appendChild(h('span', `tool-chip ${t.ok === false ? 'error' : 'done'}`, t.label)));
     if (opts.note) meta.appendChild(h('span', 'tool-chip note', opts.note));
-    const copy = h('button', 'copy-btn');
-    copy.type = 'button';
-    copy.setAttribute('aria-label', role === 'user' ? 'Copy your message' : 'Copy Tapan\'s message');
-    copy.innerHTML = `${ICON.copy}<span>Copy</span>`;
-    copy.addEventListener('click', () => copyText(text, copy));
-    meta.appendChild(copy);
+    if (text) {                                             // a picture-only message has nothing to copy
+        const copy = h('button', 'copy-btn');
+        copy.type = 'button';
+        copy.setAttribute('aria-label', role === 'user' ? 'Copy your message' : 'Copy Tapan\'s message');
+        copy.innerHTML = `${ICON.copy}<span>Copy</span>`;
+        copy.addEventListener('click', () => copyText(text, copy));
+        meta.appendChild(copy);
+    }
     body.appendChild(meta);
 
     row.appendChild(body);
@@ -494,11 +504,101 @@ function autoGrow() {
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, 180) + 'px';
 }
-function refreshSend() { dom.sendBtn.disabled = state.busy || !dom.userInput.value.trim(); }
+function refreshSend() { dom.sendBtn.disabled = state.busy || !(dom.userInput.value.trim() || (state.attach || []).length); }
+
+// ── Pictures ──────────────────────────────────────────────────────
+// Chosen, pasted or dropped pictures are shrunk here (long side 1280 px, JPEG under about 1.2 MB) so a phone photo does not cost
+// the user's data or the server's patience; the server re-checks everything. The picture is described by a vision model on the
+// server and only the description is kept.
+const PIC = { max: 3, maxSide: 1280, maxBytes: 1200000, types: /^image\/(jpeg|png|webp|gif|heic|heif)$/i };
+state.attach = [];
+let picSeq = 0;
+
+function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(String(r.result)); r.onerror = () => reject(new Error('read')); r.readAsDataURL(blob); });
+}
+function canvasToBlob(canvas, quality) {
+    return new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('encode'))), 'image/jpeg', quality));
+}
+async function loadBitmap(file) {
+    if (window.createImageBitmap) {
+        try { return await window.createImageBitmap(file, { imageOrientation: 'from-image' }); } catch (e) { /* fall back to an <img> */ }
+    }
+    const url = URL.createObjectURL(file);
+    try {
+        const img = await new Promise((resolve, reject) => { const i = new Image(); i.onload = () => resolve(i); i.onerror = () => reject(new Error('decode')); i.src = url; });
+        return img;
+    } finally { URL.revokeObjectURL(url); }
+}
+async function prepareImage(file) {
+    const bitmap = await loadBitmap(file);
+    const w0 = bitmap.width || bitmap.naturalWidth, h0 = bitmap.height || bitmap.naturalHeight;
+    let scale = Math.min(1, PIC.maxSide / Math.max(w0, h0));
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(w0 * scale)); canvas.height = Math.max(1, Math.round(h0 * scale));
+        const g = canvas.getContext('2d');
+        g.fillStyle = '#ffffff'; g.fillRect(0, 0, canvas.width, canvas.height);          // transparent PNGs become white, not black
+        g.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        let quality = 0.82, blob = await canvasToBlob(canvas, quality);
+        while (blob.size > PIC.maxBytes && quality > 0.5) { quality -= 0.12; blob = await canvasToBlob(canvas, quality); }
+        if (blob.size <= PIC.maxBytes || attempt === 2) {
+            if (blob.size > PIC.maxBytes) throw new Error('too large');
+            if (bitmap.close) bitmap.close();
+            return { dataUrl: await blobToDataUrl(blob), preview: URL.createObjectURL(blob), name: file.name || 'picture' };
+        }
+        scale *= 0.75;
+    }
+    throw new Error('too large');
+}
+const imageTools = { prepare: prepareImage };          // replaceable (tests have no canvas)
+
+function renderTray() {
+    const items = state.attach.map((p, i) => {
+        const li = h('li', 'attach-chip');
+        const img = h('img'); img.src = p.preview; img.alt = `Picture ${i + 1}: ${p.name}`;
+        const x = h('button', 'attach-x'); x.type = 'button'; x.setAttribute('aria-label', `Remove picture ${i + 1}: ${p.name}`);
+        x.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4l5.6 5.6L5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6z"/></svg>';
+        x.addEventListener('click', () => removePicture(p.id));
+        li.append(img, x);
+        return li;
+    });
+    dom.tray.replaceChildren(...items);
+    dom.tray.classList.toggle('hidden', !items.length);
+    dom.attachBtn.setAttribute('aria-label', items.length ? `Attach another picture (${items.length} of ${PIC.max} attached)` : 'Attach a picture');
+}
+function removePicture(id) {
+    const p = state.attach.find((x) => x.id === id);
+    state.attach = state.attach.filter((x) => x.id !== id);
+    if (p && URL.revokeObjectURL) { try { URL.revokeObjectURL(p.preview); } catch (e) { /* already gone */ } }
+    renderTray(); refreshSend();
+    announce('Picture removed');
+    dom.attachBtn.focus();
+}
+async function addPictures(files) {
+    const list = Array.from(files || []).filter(Boolean);
+    if (!list.length) return;
+    const okFiles = list.filter((f) => PIC.types.test(f.type || ''));
+    if (!okFiles.length) { toast('That is not a picture I can read. Use a JPEG, PNG, WebP or GIF.', 3500); return; }
+    const room = PIC.max - state.attach.length;
+    if (room <= 0) { toast(`You can attach up to ${PIC.max} pictures at a time.`, 3000); return; }
+    const take = okFiles.slice(0, room);
+    if (okFiles.length > take.length) toast(`Only ${PIC.max} pictures at a time. Added the first ${take.length}.`, 3500);
+    else if (okFiles.length < list.length) toast('Some files were not pictures and were skipped.', 3000);
+    dom.attachBtn.setAttribute('aria-busy', 'true');
+    for (const file of take) {
+        try { state.attach.push(Object.assign({ id: ++picSeq }, await imageTools.prepare(file))); }
+        catch (e) { toast(`Could not read ${file.name || 'that picture'}. Try another.`, 3500); }
+    }
+    dom.attachBtn.removeAttribute('aria-busy');
+    renderTray(); refreshSend();
+    if (state.attach.length) announce(`${state.attach.length} picture${state.attach.length === 1 ? '' : 's'} attached. Add a message or just send.`);
+}
 
 function sendMessage(override, opts = {}) {
     const text = (override !== undefined && override !== null ? override : dom.userInput.value).trim();  // ends only; inner line breaks stay
-    if (!text) return false;
+    const pics = override === undefined || override === null ? state.attach.slice() : [];
+    if (!text && !pics.length) return false;
     if (state.busy) { toast('Still working on your last message…'); return false; }
     if (!state.socket || state.socket.readyState !== WebSocket.OPEN || state.conn === 'locked') {
         toast('Not connected yet — reconnecting…');
@@ -506,10 +606,14 @@ function sendMessage(override, opts = {}) {
     }
     state.lastSent = text;
     state.lastInputWasVoice = Boolean(opts.voice);
-    addMessage(text, 'user');
+    addMessage(text, 'user', { images: pics.map((p) => p.preview) });
     if (override === undefined || override === null) { dom.userInput.value = ''; autoGrow(); }
     beginWork();
-    state.socket.send(text);
+    if (pics.length) {
+        state.socket.send(JSON.stringify({ type: 'message', text, images: pics.map((p) => p.dataUrl) }));     // pictures ride in a JSON frame; plain text stays plain
+        state.attach = [];                                  // the previews now live in the message bubble, so they are not revoked here
+        renderTray(); refreshSend();
+    } else state.socket.send(text);
     return true;
 }
 
@@ -1501,6 +1605,19 @@ function bindEvents() {
     });
 
     dom.composer.addEventListener('submit', (e) => { e.preventDefault(); sendMessage(); });
+    dom.attachBtn.addEventListener('click', () => dom.fileInput.click());
+    dom.fileInput.addEventListener('change', () => { const files = Array.from(dom.fileInput.files || []); dom.fileInput.value = ''; addPictures(files); });
+    dom.userInput.addEventListener('paste', (e) => {
+        const files = Array.from((e.clipboardData && e.clipboardData.files) || []).filter((f) => /^image\//.test(f.type));
+        if (files.length) { e.preventDefault(); addPictures(files); }
+    });
+    ['dragenter', 'dragover'].forEach((type) => dom.chatMain.addEventListener(type, (e) => {
+        if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) { e.preventDefault(); dom.chatMain.classList.add('dropping'); }
+    }));
+    ['dragleave', 'drop'].forEach((type) => dom.chatMain.addEventListener(type, (e) => {
+        dom.chatMain.classList.remove('dropping');
+        if (type === 'drop' && e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) { e.preventDefault(); addPictures(e.dataTransfer.files); }
+    }));
     dom.userInput.addEventListener('input', () => { autoGrow(); refreshSend(); });
     dom.userInput.addEventListener('focus', () => { setTimeout(() => { if (nearBottom()) scrollToBottom(false); }, 250); });
     dom.userInput.addEventListener('keydown', (e) => {
@@ -1644,8 +1761,8 @@ function init() {
     refreshSend();
 }
 
-window.TapanApp = { state, dom, push };
-window.TapanHost = { reload: () => window.location.reload(), api, netTiming: NET, busyStart: (label) => { const op = { label, delay: NET.showWrite }; netStart(op); return op; }, busyEnd: (op) => netStop(op), toast, announce, h, store, state, push, deviceId, webVersion: WEB_VERSION, isStandalone, copyText, checkForUpdate, sendClientReport, closePanel: () => closePanel() };   // read-only handle for tests and debugging in the console
+window.TapanApp = { state, dom, push, sendMessage };
+window.TapanHost = { reload: () => window.location.reload(), api, netTiming: NET, imageTools, addPictures, busyStart: (label) => { const op = { label, delay: NET.showWrite }; netStart(op); return op; }, busyEnd: (op) => netStop(op), toast, announce, h, store, state, push, deviceId, webVersion: WEB_VERSION, isStandalone, copyText, checkForUpdate, sendClientReport, closePanel: () => closePanel() };   // read-only handle for tests and debugging in the console
 
 if (!window.__TAPAN_NO_AUTOINIT) {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

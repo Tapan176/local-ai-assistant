@@ -1622,6 +1622,98 @@ const authed = (t, s = t.sockets[t.sockets.length - 1]) => { t.open(s); t.say(s,
   check("design: text on the accent colour always uses the theme's own foreground, never a fixed colour", !/background: var\(--accent\);\s*color: #/.test(cssText));
   check("design: the new scripts are not using innerHTML-style injection", !/innerHTML|insertAdjacentHTML|outerHTML/.test(fs.readFileSync(ROOT + "theme.js", "utf8")));
 
+  // ── Pictures in chat ──────────────────────────────────────────────
+  {
+    const pic = (name, type = "image/jpeg") => ({ name, type, size: 1000 });
+    const fakePrepare = async (f) => ({ dataUrl: "data:image/jpeg;base64,/9j/" + f.name.replace(/\W/g, ""), preview: "blob:test/" + f.name, name: f.name });
+    const sentJson = (t) => { const s = t.sockets[t.sockets.length - 1]; return s.sent.map((x) => { try { return JSON.parse(x); } catch (e) { return x; } }); };
+    const picBoot = async () => { const t = boot({ routes: navRoutes() }); authed(t); await wait(20); t.w.TapanHost.imageTools.prepare = fakePrepare; return t; };
+    const submit = (t) => t.$("composer").dispatchEvent(new t.w.Event("submit", { bubbles: true, cancelable: true }));
+
+    let pt = await picBoot();
+    check("pictures: the composer has a named attach button and a hidden picture input that accepts images", pt.$("attach-btn") && /attach a picture/i.test(pt.$("attach-btn").getAttribute("aria-label")) && pt.$("file-input").accept === "image/*" && pt.$("file-input").multiple);
+    check("pictures: the tray starts hidden", pt.$("attach-tray").classList.contains("hidden"));
+    check("pictures: Send is disabled with nothing typed and nothing attached", pt.$("send-btn").disabled === true);
+
+    await pt.w.TapanHost.addPictures([pic("one.jpg")]);
+    check("pictures: an attached picture appears in the tray with a description", !pt.$("attach-tray").classList.contains("hidden") && pt.$("attach-tray").querySelectorAll("li").length === 1 && /one\.jpg/.test(pt.$("attach-tray").querySelector("img").alt));
+    check("pictures: every thumbnail has its own, uniquely named remove button", /remove picture 1: one\.jpg/i.test(pt.$("attach-tray").querySelector("button").getAttribute("aria-label")));
+    check("pictures: Send is enabled with just a picture and no text", pt.$("send-btn").disabled === false);
+    check("pictures: the attach button now says how many are attached", /1 of 3/.test(pt.$("attach-btn").getAttribute("aria-label")));
+
+    pt.type("what is this?"); submit(pt); await wait(20);
+    const frames = sentJson(pt);
+    const frame = frames[frames.length - 1];
+    check("pictures: with a picture the message goes as a JSON frame carrying text and the shrunken picture", frame && frame.type === "message" && frame.text === "what is this?" && frame.images.length === 1 && /^data:image\/jpeg;base64,/.test(frame.images[0]));
+    const userRow = pt.messages().filter((r) => r.classList.contains("user")).pop();
+    check("pictures: your bubble shows the picture with alt text and the words", userRow && userRow.querySelector(".msg-images img") && /picture 1/i.test(userRow.querySelector(".msg-images img").alt) && /what is this\?/.test(userRow.textContent));
+    check("pictures: the tray is cleared after sending", pt.$("attach-tray").classList.contains("hidden") && pt.S().attach.length === 0);
+    pt.say(pt.sockets[pt.sockets.length - 1], { type: "final", text: "It looks like a cat." }); await wait(10);
+    pt.type("hello again"); submit(pt); await wait(20);
+    check("pictures: a text-only message is still sent as plain text", sentJson(pt).pop() === "hello again");
+
+    pt = await picBoot();
+    await pt.w.TapanHost.addPictures([pic("only.png", "image/png")]);
+    submit(pt); await wait(20);
+    const only = sentJson(pt).pop();
+    check("pictures: a picture with no words is accepted (empty text, one image)", only && only.text === "" && only.images.length === 1);
+    const onlyRow = pt.messages().filter((r) => r.classList.contains("user")).pop();
+    check("pictures: a picture-only bubble has no empty text bubble and no useless Copy button", onlyRow && !onlyRow.querySelector(".bubble") && !onlyRow.querySelector(".copy-btn") && onlyRow.querySelector("img"));
+
+    pt = await picBoot();
+    await pt.w.TapanHost.addPictures([pic("a.jpg"), pic("b.jpg"), pic("c.jpg"), pic("d.jpg")]);
+    check("pictures: at most three at a time, and the user is told", pt.S().attach.length === 3 && /only 3/i.test(pt.$("toast").textContent));
+    await pt.w.TapanHost.addPictures([pic("e.jpg")]);
+    check("pictures: a fourth later is refused politely", pt.S().attach.length === 3 && /up to 3/i.test(pt.$("toast").textContent));
+
+    pt = await picBoot();
+    await pt.w.TapanHost.addPictures([pic("notes.pdf", "application/pdf")]);
+    check("pictures: a non-picture file is refused with a plain reason and nothing is attached", pt.S().attach.length === 0 && /not a picture/i.test(pt.$("toast").textContent));
+    await pt.w.TapanHost.addPictures([pic("good.jpg"), pic("notes.pdf", "application/pdf")]);
+    check("pictures: a mixed drop keeps the pictures and says what was skipped", pt.S().attach.length === 1 && /skipped/i.test(pt.$("toast").textContent));
+
+    pt = await picBoot();
+    pt.w.TapanHost.imageTools.prepare = async () => { throw new Error("decode"); };
+    await pt.w.TapanHost.addPictures([pic("broken.jpg")]);
+    check("pictures: a picture that cannot be read is reported and does not wedge the composer", pt.S().attach.length === 0 && /could not read broken\.jpg/i.test(pt.$("toast").textContent) && !pt.$("attach-btn").hasAttribute("aria-busy"));
+
+    pt = await picBoot();
+    await pt.w.TapanHost.addPictures([pic("x.jpg"), pic("y.jpg")]);
+    pt.$("attach-tray").querySelectorAll("button")[0].click();
+    check("pictures: the remove button takes that picture out and keeps the other", pt.S().attach.length === 1 && pt.S().attach[0].name === "y.jpg" && pt.$("attach-tray").querySelectorAll("li").length === 1);
+    check("pictures: focus goes back to the attach button after removing (not lost)", pt.w.document.activeElement === pt.$("attach-btn"));
+    pt.$("attach-tray").querySelector("button").click();
+    check("pictures: removing the last one hides the tray and disables Send again", pt.$("attach-tray").classList.contains("hidden") && pt.$("send-btn").disabled === true);
+
+    pt = await picBoot();
+    const pasted = new pt.w.Event("paste", { bubbles: true, cancelable: true });
+    pasted.clipboardData = { files: [pic("shot.png", "image/png")] };
+    pt.$("user-input").dispatchEvent(pasted);
+    await wait(20);
+    check("pictures: pasting a screenshot attaches it (and does not paste junk text)", pt.S().attach.length === 1 && pasted.defaultPrevented);
+    const textPaste = new pt.w.Event("paste", { bubbles: true, cancelable: true });
+    textPaste.clipboardData = { files: [] };
+    pt.$("user-input").dispatchEvent(textPaste);
+    check("pictures: pasting ordinary text is left alone", !textPaste.defaultPrevented);
+
+    pt = await picBoot();
+    const dropped = new pt.w.Event("drop", { bubbles: true, cancelable: true });
+    dropped.dataTransfer = { files: [pic("drag.jpg")], types: ["Files"] };
+    pt.w.document.querySelector(".chat").dispatchEvent(dropped);
+    await wait(20);
+    check("pictures: dropping a picture on the chat attaches it", pt.S().attach.length === 1 && dropped.defaultPrevented);
+
+    pt = await picBoot();
+    await pt.w.TapanHost.addPictures([pic("keep.jpg")]);
+    pt.w.TapanApp.sendMessage("a spoken command", { voice: true });
+    await wait(10);
+    check("pictures: text sent some other way (voice, quick replies) never drags along the pictures waiting in the tray", sentJson(pt).pop() === "a spoken command" && pt.S().attach.length === 1);
+
+    const cssPics = fs.readFileSync(ROOT + "style.css", "utf8");
+    check("pictures: the remove button is large enough to tap on touch screens", /pointer: coarse\) \{ \.attach-x \{ width: 36px/.test(cssPics));
+    check("pictures: thumbnails use theme tokens, not fixed colours", !/\.attach-chip[^}]*#[0-9a-f]{3,6}/i.test(cssPics));
+  }
+
   console.log(failures ? `\n${failures} FAILED` : "\nALL UI TESTS PASSED");
   process.exit(failures ? 1 : 0);
 })();

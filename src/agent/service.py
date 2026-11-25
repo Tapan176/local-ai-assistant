@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from src.agent import recurrence, timeutil
+from src.agent import recurrence, timeutil, vision
 from src.agent.loop import AgentLoop, EventCallback, summarize_steps
 from src.config.settings import Settings
 from src.core.orchestrator import Orchestrator
@@ -42,9 +42,23 @@ class AgentOrchestrator:
             raise AttributeError(item)
         return getattr(self.legacy, item)
 
+    def _notice(self, session_id: str, text: str) -> OrchestratorResponse:
+        return OrchestratorResponse(session_id=session_id, text=text, action_type="respond", tool_used=None, debug={"mode": "vision"})
+
     async def handle_user_input(
-        self, session_id: str, user_text: str, on_event: EventCallback | None = None
+        self, session_id: str, user_text: str, on_event: EventCallback | None = None, images: list[str] | None = None
     ) -> OrchestratorResponse:
+        stored_text: str | None = None
+        if images:
+            # Pictures only make sense on the agent path: a vision model describes them and the assistant acts on that description.
+            if not (self.settings.agent_enabled and self.settings.llm_provider.lower() != "mock"):
+                return self._notice(session_id, "Pictures need an AI model, and none is set up on this server.")
+            try:
+                clean = vision.parse_images(images)
+                digest = await vision.describe(self.agent.llm, self.agent.store, self.settings, clean, user_text)
+            except vision.VisionError as exc:
+                return self._notice(session_id, str(exc))
+            user_text, stored_text = vision.compose(user_text, digest, len(clean))
         if self.settings.agent_enabled and self.settings.llm_provider.lower() != "mock":
             try:
                 result = await self.agent.run(session_id, user_text, on_event=on_event)
@@ -52,7 +66,7 @@ class AgentOrchestrator:
                 logger.exception("Agent loop crashed; falling back to legacy pipeline")
                 result = None
             if result is not None and result.text:
-                await self._remember_turn(session_id, user_text, result.text, result.steps)
+                await self._remember_turn(session_id, stored_text or user_text, result.text, result.steps)
                 last_tool = result.steps[-1].name if result.steps else None
                 return OrchestratorResponse(
                     session_id=session_id,

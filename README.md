@@ -153,6 +153,21 @@ The *Growth* tab keeps what you want to remember about living and working well.
   shows more without changing today's pick.
 - **From chat**: "save this lesson: …", "add a rule: …", "what are my rules about money?", "a thought for today".
 
+## Pictures in chat
+
+Tap the paperclip, paste a screenshot, or drop a picture on the chat (up to three at a time). The browser shrinks each one to at most
+1280 px (JPEG, under about 1.2 MB) before sending, so a phone photo does not eat your data.
+
+- **What happens**: a vision model describes the picture (receipts, bills, screenshots, documents, whiteboards, anything), and your
+  assistant acts on that description: it can offer to log an expense from a receipt, add a payment plan from a bill, or save the key
+  facts of a document as a work note or a memory.
+- **What is kept**: the picture itself is **not stored** anywhere (not on the server, not in the database). Only a short description
+  stays in the conversation, plus whatever you tell the assistant to save.
+- **Safe by design**: text inside a picture is treated as data, never as instructions. The server re-checks the type (by the file's
+  real bytes), size and count of every picture.
+- **Cost**: roughly a fraction of a cent per picture on the default cheap vision model. `TAPAN_VISION_MODEL` changes the model;
+  `TAPAN_VISION_DAILY_LIMIT` (default 60 picture requests per day, `0` = off) is a hard stop so it can never run away.
+
 ## Weather
 
 Free providers with automatic fallback and no API keys: Open-Meteo, then MET Norway, then wttr.in (geocoding falls back to

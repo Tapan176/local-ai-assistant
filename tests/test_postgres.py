@@ -680,3 +680,13 @@ async def test_a_pooler_that_refuses_batches_makes_the_store_fall_back_without_l
     assert PostgresStore.BATCH is False                                                                        # and the store stopped trying
     await pg.execute_transaction([("DELETE FROM people WHERE name = ?", ("f0",)), ("DELETE FROM people WHERE name = ?", ("f1",))])
     assert calls["script"] == 1 and (await pg.fetchone("SELECT COUNT(*) AS n FROM people"))["n"] == 1
+
+
+async def test_the_daily_picture_cap_is_exact_on_postgres_even_under_concurrency(pg, settings):
+    from src.agent import vision
+
+    capped = settings.model_copy(update={"vision_daily_limit": 5})
+    results = await asyncio.gather(*(vision.take_budget(pg, capped) for _ in range(12)), return_exceptions=True)
+    assert sum(1 for r in results if r is None) == 5 and sum(1 for r in results if isinstance(r, vision.VisionError)) == 7
+    key = [r["id"] for r in await pg.fetchall("SELECT id FROM app_settings WHERE id LIKE 'vision:%'")]
+    assert len(key) == 1 and (await pg.fetchone("SELECT value FROM app_settings WHERE id = ?", (key[0],)))["value"] == "12"
