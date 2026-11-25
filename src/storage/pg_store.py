@@ -108,6 +108,12 @@ _TABLES = {
         status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, completed_at TEXT,
         project TEXT NOT NULL DEFAULT '', details TEXT NOT NULL DEFAULT '', reminder_id BIGINT,
         remind TEXT NOT NULL DEFAULT ''""",
+    "kg_nodes": """
+        id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL, name_key TEXT UNIQUE NOT NULL, kind TEXT NOT NULL DEFAULT 'thing',
+        summary TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL""",
+    "kg_edges": """
+        id BIGSERIAL PRIMARY KEY, src BIGINT NOT NULL, dst BIGINT NOT NULL, relation TEXT NOT NULL,
+        note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, UNIQUE (src, dst, relation)""",
     "memories": """
         id BIGSERIAL PRIMARY KEY, content TEXT NOT NULL, category TEXT NOT NULL DEFAULT 'general',
         created_at TEXT NOT NULL""",
@@ -144,6 +150,8 @@ _INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_ex_emis_due ON ex_emis(due_date)",
     "CREATE INDEX IF NOT EXISTS idx_ex_spend_day ON ex_spend(spent_on)",
     "CREATE INDEX IF NOT EXISTS idx_notes_space ON notes(space, kind)",
+    "CREATE INDEX IF NOT EXISTS idx_kg_edges_src ON kg_edges(src)",
+    "CREATE INDEX IF NOT EXISTS idx_kg_edges_dst ON kg_edges(dst)",
 )
 
 

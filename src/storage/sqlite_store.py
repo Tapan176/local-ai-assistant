@@ -187,6 +187,28 @@ CREATE TABLE IF NOT EXISTS tasks (
     completed_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS kg_nodes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    name_key TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL DEFAULT 'thing',
+    summary TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS kg_edges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    src INTEGER NOT NULL,
+    dst INTEGER NOT NULL,
+    relation TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    UNIQUE (src, dst, relation)
+);
+CREATE INDEX IF NOT EXISTS idx_kg_edges_src ON kg_edges(src);
+CREATE INDEX IF NOT EXISTS idx_kg_edges_dst ON kg_edges(dst);
+
 CREATE TABLE IF NOT EXISTS memories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     content TEXT NOT NULL,

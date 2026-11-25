@@ -15,6 +15,7 @@ const kitJs = fs.readFileSync(ROOT + "panel-kit.js", "utf8");
 const themeJs = fs.readFileSync(ROOT + "theme.js", "utf8");
 const workJs = fs.readFileSync(ROOT + "work.js", "utf8");
 const growthJs = fs.readFileSync(ROOT + "growth.js", "utf8");
+const memoryJs = fs.readFileSync(ROOT + "settings-memory.js", "utf8");
 
 let failures = 0;
 const check = (name, cond, extra = "") => { console.log((cond ? "PASS " : "FAIL ") + name + (cond ? "" : "   " + extra)); if (!cond) failures++; };
@@ -85,6 +86,7 @@ function boot({ storage = {}, coarse = false, routes: extra = {}, url, ua, stand
   w.eval(version ? appJs.replace(/__WEB_VERSION__/g, version) : appJs);
   w.eval(settingsJs);
   w.eval(integrationsJs);
+  w.eval(memoryJs);
   w.eval(moneyJs);
   w.eval(moneySpendJs);
   w.eval(kitJs);
@@ -1712,6 +1714,59 @@ const authed = (t, s = t.sockets[t.sockets.length - 1]) => { t.open(s); t.say(s,
     const cssPics = fs.readFileSync(ROOT + "style.css", "utf8");
     check("pictures: the remove button is large enough to tap on touch screens", /pointer: coarse\) \{ \.attach-x \{ width: 36px/.test(cssPics));
     check("pictures: thumbnails use theme tokens, not fixed colours", !/\.attach-chip[^}]*#[0-9a-f]{3,6}/i.test(cssPics));
+  }
+
+  // ── Memory graph (Settings) ───────────────────────────────────────
+  {
+    const graphData = () => ({
+      nodes: [{ id: 1, name: "Zorya", kind: "person", summary: "college friend", degree: 2 }, { id: 2, name: "Quillon Labs", kind: "org", summary: "", degree: 1 }],
+      edges: [{ id: 11, src: 1, dst: 2, src_name: "Zorya", dst_name: "Quillon Labs", relation: "works at", note: "since 2020" }, { id: 12, src: 1, dst: 3, src_name: "Zorya", dst_name: "the user", relation: "sister of", note: "" }],
+      totals: { nodes: 2, edges: 2, max_nodes: 5000, max_edges: 20000 },
+    });
+    let state = graphData();
+    const deletes = [];
+    const openGraph = async () => {
+      const g = boot({ drawer: true, routes: m0Routes({
+        "GET /api/graph": (url) => { const q = new URL(url, "https://x.test").searchParams.get("q"); return q ? { ...state, nodes: state.nodes.filter((n) => n.name.toLowerCase().includes(q.toLowerCase())) } : state; },
+        "DELETE /api/graph/edges/": (url) => { deletes.push(url); state = { ...state, edges: state.edges.filter((e) => !url.endsWith("/" + e.id)) }; return { ok: true }; },
+        "DELETE /api/graph/nodes/": (url) => { deletes.push(url); state = { ...state, nodes: state.nodes.filter((n) => !url.endsWith("/" + n.id)), edges: [] }; return { ok: true, name: "Zorya" }; },
+      }) });
+      authed(g); await wait(40);
+      g.$("today-btn").click(); g.$("tab-settings").click(); await wait(120);
+      const section = [...g.$("panel-settings").querySelectorAll("details")].find((d) => d.dataset.id === "memory-graph");
+      g.section = section;
+      if (!section) return g;
+      section.open = true; section.dispatchEvent(new g.w.Event("toggle")); await wait(120);
+      g.body = section.querySelector(".set-body");
+      return g;
+    };
+    let gg = await openGraph();
+    check("graph: Settings has a Memory graph section", !!gg.section && /Memory graph/.test(gg.section.querySelector("summary").textContent));
+    check("graph: it lists each thing with its kind and description", /Zorya/.test(gg.body.textContent) && /Person/.test(gg.body.textContent) && /college friend/.test(gg.body.textContent) && /Organisation/.test(gg.body.textContent));
+    check("graph: connections are shown as readable sentences, with their notes", /Zorya → works at → Quillon Labs \(since 2020\)/.test(gg.body.textContent));
+    check("graph: the totals and limits are shown", /2 things · 2 connections/.test(gg.body.textContent));
+    check("graph: the search box is labelled", gg.body.querySelector("input[type=search]").getAttribute("aria-label") === "Search the memory graph");
+    check("graph: every remove button names what it removes", [...gg.body.querySelectorAll("button.danger")].every((b) => /^(Remove connection:|Forget) /.test(b.getAttribute("aria-label"))) && gg.body.querySelectorAll("button.danger").length === 5);
+    check("graph: the section script does not inject HTML", !/innerHTML|insertAdjacentHTML|outerHTML/.test(memoryJs));
+
+    const first = gg.body.querySelector(".graph-edges button.danger");
+    first.click(); await wait(10);
+    check("graph: the first tap only arms the removal (a stray tap deletes nothing)", deletes.length === 0 && /tap again/i.test(first.textContent));
+    first.click(); await wait(120);
+    check("graph: the second tap removes that one connection and refreshes the list", deletes.length === 1 && /\/api\/graph\/edges\/11$/.test(deletes[0]) && !/→ works at →/.test(gg.body.textContent) && /→ sister of →/.test(gg.body.textContent));
+
+    const forget = [...gg.body.querySelectorAll(".graph-node > button.danger")][0];
+    forget.click(); forget.click(); await wait(120);
+    check("graph: 'Forget this' removes the whole thing after two taps", /\/api\/graph\/nodes\/1$/.test(deletes[1]) && !/college friend/.test(gg.body.textContent));
+
+    state = graphData();
+    gg.body.querySelector("button.link-btn:not(.danger):not([type=submit])").click(); await wait(100);
+    const box = gg.body.querySelector("input[type=search]");
+    box.value = "quil"; box.form.dispatchEvent(new gg.w.Event("submit", { bubbles: true, cancelable: true })); await wait(120);
+    check("graph: searching asks the server and shows only matches", /Quillon Labs/.test(gg.body.textContent) && !/college friend/.test(gg.body.textContent) && gg.calls.some((c) => /\/api\/graph\?q=quil/.test(c.url)));
+    state = { nodes: [], edges: [], totals: { nodes: 0, edges: 0, max_nodes: 5000, max_edges: 20000 } };
+    gg = await openGraph();
+    check("graph: an empty graph explains how to fill it", /Nothing yet/.test(gg.body.textContent) && /tell the assistant/i.test(gg.body.textContent));
   }
 
   console.log(failures ? `\n${failures} FAILED` : "\nALL UI TESTS PASSED");

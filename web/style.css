@@ -888,3 +888,13 @@ h1 { font: 650 1.12rem/1 var(--font-ui); letter-spacing: -0.2px; display: flex; 
 .msg-images img { width: min(180px, 42vw); max-height: 200px; object-fit: cover; border-radius: 14px; border: 1px solid var(--line-strong); }
 .chat.dropping { outline: 2px dashed var(--accent); outline-offset: -6px; }
 .icon-btn[aria-busy="true"] { opacity: 0.6; }
+
+/* ── Memory graph (Settings) ──────────────────────────────── */
+.graph-list, .graph-edges { list-style: none; margin: 0; padding: 0; }
+.graph-list { display: grid; gap: 10px; margin: 10px 0; }
+.graph-node { padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-2); }
+.graph-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.graph-kind { font-size: 0.75rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
+.graph-summary { margin: 6px 0 0; color: var(--muted); overflow-wrap: anywhere; }
+.graph-edges { margin: 8px 0; display: grid; gap: 4px; }
+.graph-edges li { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; overflow-wrap: anywhere; }

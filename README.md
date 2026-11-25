@@ -153,6 +153,22 @@ The *Growth* tab keeps what you want to remember about living and working well.
   shows more without changing today's pick.
 - **From chat**: "save this lesson: …", "add a rule: …", "what are my rules about money?", "a thought for today".
 
+## Memory graph
+
+Besides the flat list of things it remembers, the assistant keeps a small **graph** of the people, places, organisations and projects in
+your life and how they connect ("Zorya works at Quillon Labs", "Quillon Labs is based in Lisbon", "Marek mentors me").
+
+- **How it fills**: tell it a lasting fact and it stores the connection (`link_entities`, `describe_entity`); ask "what do you know about
+  Zorya?" to read it back (`recall_connections`); "forget Zorya" removes a thing and its connections.
+- **How it helps**: when you mention a stored name, the assistant is handed that thing's neighbourhood (two steps out) with your message,
+  so "what should I tell Zorya about the Q4 numbers?" already knows where she works. No extra model call, and nothing is added when no
+  stored name appears in your message. "Me" is a single node and is never expanded through, so one hub cannot drag in everything.
+- **Settings → Memory graph**: search, and remove any thing or connection (two taps). Sizes are capped (5,000 things, 20,000 connections).
+- **Safe by design**: stored text is flattened to one line and labelled as background data, never instructions.
+- **Free, and no extra service**: two small tables in the same database (SQLite or Postgres/Supabase). The graph code is one module, so
+  a Neo4j backend could replace it later without touching the assistant; for one person's life a hosted graph database adds a service
+  to run and a size limit, and buys nothing at this scale.
+
 ## Pictures in chat
 
 Tap the paperclip, paste a screenshot, or drop a picture on the chat (up to three at a time). The browser shrinks each one to at most

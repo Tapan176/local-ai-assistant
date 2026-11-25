@@ -690,3 +690,25 @@ async def test_the_daily_picture_cap_is_exact_on_postgres_even_under_concurrency
     assert sum(1 for r in results if r is None) == 5 and sum(1 for r in results if isinstance(r, vision.VisionError)) == 7
     key = [r["id"] for r in await pg.fetchall("SELECT id FROM app_settings WHERE id LIKE 'vision:%'")]
     assert len(key) == 1 and (await pg.fetchone("SELECT value FROM app_settings WHERE id = ?", (key[0],)))["value"] == "12"
+
+
+async def test_graph_memory_works_the_same_on_postgres(pg):
+    from src.agent import graph
+
+    await graph.link(pg, "Zorya", "works at", "Quillon Labs", "person", "org", note="since 2020")
+    await graph.link(pg, "zorya", "WORKS AT", "quillon labs")                       # same edge, no duplicate, note kept
+    await graph.link(pg, "Quillon Labs", "is based in", "Lisbon", "org", "place")
+    await graph.link(pg, "Zorya", "sister of", "me")                                # 'me' is the single 'the user' node
+    await graph.link(pg, "Marek", "mentor of", "the user")
+    await graph.upsert_node(pg, "Zorya", summary="college friend")
+    block = await graph.context_block(pg, "what should I tell zorya?")
+    assert "Zorya (person): college friend" in block and "works at → Quillon Labs (since 2020)" in block and "Lisbon" in block and "Marek" not in block
+    assert (await pg.fetchone("SELECT COUNT(*) AS n FROM kg_edges"))["n"] == 4
+    assert [n["name"] for n in (await graph.overview(pg, "quil"))["nodes"]] == ["Quillon Labs"]
+    assert [n["name"] for n in (await graph.overview(pg, "_"))["nodes"]] == []
+    got = await graph.connections(pg, "Quillon Labs")
+    assert got["connections"] and got["kind"] == "org"
+    node = await graph.find_node(pg, "quillon labs")
+    assert await graph.forget_node(pg, node["id"]) == "Quillon Labs"
+    assert "Quillon" not in await graph.context_block(pg, "zorya")
+    assert (await pg.fetchone("SELECT COUNT(*) AS n FROM kg_edges"))["n"] == 2
