@@ -84,6 +84,8 @@ function bindDom() {
         topbar: document.querySelector('.topbar'), chatMain: document.querySelector('.chat'),
         installBtn: $('install-btn'), installBanner: $('install-banner'), installYes: $('install-yes'), installNo: $('install-no'),
         installSheet: $('install-sheet'), installSteps: $('install-steps'), installClose: $('install-close'),
+        bnav: $('bottom-nav'), panelTitle: $('panel-title'), themeBtn: $('theme-btn'), moreSheet: $('more-sheet'), moreClose: $('more-close'), moreHistory: $('more-history'),
+        moreSettings: $('more-settings'), moreInstall: $('more-install'), moreLock: $('more-lock'),
         authOverlay: $('auth-overlay'), authForm: $('auth-form'), authInput: $('auth-input'), authMsg: $('auth-msg'),
     });
 }
@@ -769,6 +771,7 @@ async function refreshToday(silent) {
 }
 
 // ── Side panel / drawer ───────────────────────────────────────────
+const TAB_TITLES = { today: 'Today', history: 'History', money: 'Money', work: 'Work', growth: 'Growth', settings: 'Settings' };
 function setTab(tab) {
     state.tab = tab;
     [['today', dom.tabToday, dom.panelToday], ['history', dom.tabHistory, dom.panelHistory], ['money', dom.tabMoney, dom.panelMoney], ['work', dom.tabWork, dom.panelWork],
@@ -783,6 +786,7 @@ function setTab(tab) {
     else if (tab === 'history') loadConversations();
     else if (screens[tab]) { const [mod, panel, label] = screens[tab]; if (window[mod]) window[mod].render(panel); else panel.textContent = `The ${label} tab could not load. Reload the page.`; }
     else if (window.TapanSettings) window.TapanSettings.render(dom.panelSettings);
+    syncBottomNav();
 }
 
 const drawerQuery = window.matchMedia ? window.matchMedia('(max-width: 1000px)') : { matches: false, addEventListener() {} };
@@ -796,9 +800,57 @@ function syncDrawerA11y() {
     setInert(dom.topbar, drawer && open);
     setInert(dom.chatMain, drawer && open);
     setInert(dom.installBanner, drawer && open);
-    if (drawer && open) { dom.side.setAttribute('role', 'dialog'); dom.side.setAttribute('aria-modal', 'true'); }
-    else { dom.side.setAttribute('role', 'complementary'); dom.side.removeAttribute('aria-modal'); }
-    dom.scrim.hidden = !(drawer && open);
+    if (drawer && open) { dom.side.setAttribute('role', 'region'); dom.side.setAttribute('aria-labelledby', 'panel-title'); }   // a page, not a modal: the bottom bar stays usable
+    else { dom.side.setAttribute('role', 'complementary'); dom.side.removeAttribute('aria-labelledby'); }
+    dom.side.removeAttribute('aria-modal');
+    dom.scrim.hidden = true;
+    syncBottomNav();
+}
+
+// ── Navigation: the bottom bar (phones and tablets) and its More menu ──
+function bottomNavActive() {
+    if (!drawerMode()) return state.tab;                                  // desktop: the rail shows which page the side panel is on (every page has its own button)
+    if (dom.app.dataset.panel !== 'open') return 'chat';
+    return ['today', 'money', 'work', 'growth'].includes(state.tab) ? state.tab : 'more';
+}
+function syncBottomNav() {
+    if (dom.bnav) {
+        const active = bottomNavActive();
+        dom.bnav.querySelectorAll('.bnav-btn').forEach((b) => { if (b.dataset.dest === active) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
+    }
+    if (dom.panelTitle) dom.panelTitle.textContent = TAB_TITLES[state.tab] || '';
+}
+function goDest(dest) {
+    if (dest === 'chat') { closePanel(); return; }
+    if (dest === 'more') { openMoreSheet(); return; }
+    if (dom.app.dataset.panel === 'open' && state.tab === dest) return;
+    openPanel(dest);
+}
+function updateMoreSheet() {
+    const pref = window.TapanTheme ? window.TapanTheme.get() : 'auto';
+    dom.moreSheet.querySelectorAll('.seg3 button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.pref === pref)));
+    dom.moreInstall.classList.toggle('hidden', isStandalone());
+    dom.moreLock.classList.toggle('hidden', !state.token);
+}
+function openMoreSheet() {
+    state.sheetOpener = document.activeElement;
+    updateMoreSheet();
+    dom.moreSheet.classList.remove('hidden');
+    setInert(dom.app, true);
+    dom.moreHistory.focus();
+}
+function closeMoreSheet(restoreFocus = true) {
+    if (dom.moreSheet.classList.contains('hidden')) return;
+    dom.moreSheet.classList.add('hidden');
+    setInert(dom.app, state.authNeeded);
+    if (restoreFocus && state.sheetOpener && state.sheetOpener.isConnected) state.sheetOpener.focus();
+}
+const THEME_WORDS = { auto: 'automatic, follows your device', light: 'light', dark: 'dark' };
+function paintThemeButton() {
+    if (!dom.themeBtn || !window.TapanTheme) return;
+    const pref = window.TapanTheme.get();
+    dom.themeBtn.dataset.pref = pref;
+    dom.themeBtn.setAttribute('aria-label', `Appearance: ${THEME_WORDS[pref]}. Tap to change.`);
 }
 
 function openPanel(tab) {
@@ -810,7 +862,7 @@ function openPanel(tab) {
     syncDrawerA11y();
     if (drawerMode()) {
         if (!state.drawerPushed) { history.pushState({ tapanPanel: true }, ''); state.drawerPushed = true; }   // Android Back closes it
-        dom.sideClose.focus();
+        (dom.panelTitle || dom.sideClose).focus();           // screen readers land on the page title; the bottom bar is one Tab away
     }
 }
 
@@ -1474,8 +1526,21 @@ function bindEvents() {
     dom.installSheet.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeInstallSheet(); else trapTab(dom.installSheet, e); });
     dom.authOverlay.addEventListener('keydown', (e) => trapTab(dom.authOverlay, e));
 
+    // bottom bar, More menu, appearance
+    if (dom.bnav) dom.bnav.addEventListener('click', (e) => { const b = e.target.closest('.bnav-btn'); if (b) goDest(b.dataset.dest); });
+    dom.moreClose.addEventListener('click', () => closeMoreSheet());
+    dom.moreSheet.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMoreSheet(); else trapTab(dom.moreSheet, e); });
+    dom.moreHistory.addEventListener('click', () => { closeMoreSheet(false); openPanel('history'); });
+    dom.moreSettings.addEventListener('click', () => { closeMoreSheet(false); openPanel('settings'); });
+    dom.moreInstall.addEventListener('click', () => { closeMoreSheet(false); startInstall(); });
+    dom.moreLock.addEventListener('click', () => { closeMoreSheet(false); dom.lockBtn.click(); });
+    dom.moreSheet.querySelectorAll('.seg3 button').forEach((b) => b.addEventListener('click', () => { if (window.TapanTheme) window.TapanTheme.set(b.dataset.pref); updateMoreSheet(); }));
+    if (dom.themeBtn) dom.themeBtn.addEventListener('click', () => { if (window.TapanTheme) { const next = window.TapanTheme.cycle(); toast(`Appearance: ${THEME_WORDS[next]}`); } });
+    document.addEventListener('tapan-theme', () => { paintThemeButton(); updateMoreSheet(); });
+    paintThemeButton();
+    syncBottomNav();
+
     // drawer: keyboard focus stays inside while open, Android Back closes it, layout changes re-sync the semantics
-    dom.side.addEventListener('keydown', (e) => { if (drawerMode() && dom.app.dataset.panel === 'open') trapTab(dom.side, e); });
     window.addEventListener('popstate', () => { if (dom.app.dataset.panel === 'open') closePanel(true); });
     if (drawerQuery.addEventListener) drawerQuery.addEventListener('change', syncDrawerA11y);
 
@@ -1518,6 +1583,7 @@ function bindEvents() {
 
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape' && !dom.installSheet.classList.contains('hidden')) closeInstallSheet();
+        else if (e.key === 'Escape' && !dom.moreSheet.classList.contains('hidden')) closeMoreSheet();
         else if (e.key === 'Escape' && dom.app.dataset.panel === 'open') closePanel();
         const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName || '');
         if (e.key === '/' && !typing && !state.authNeeded) { e.preventDefault(); dom.userInput.focus(); }
@@ -1538,6 +1604,7 @@ function bindEvents() {
     if (window.visualViewport) {
         const fit = () => {
             document.documentElement.style.setProperty('--vvh', `${window.visualViewport.height}px`);
+            dom.app.classList.toggle('kbd', window.innerHeight - window.visualViewport.height > 150);      // the on-screen keyboard is up: hide the bottom bar
             window.scrollTo(0, 0);
         };
         window.visualViewport.addEventListener('resize', fit);

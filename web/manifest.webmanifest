@@ -1,6 +1,6 @@
 {
   "id": "/web/",
-  "name": "TAPAN_AI — personal assistant",
+  "name": "Tapan — personal assistant",
   "short_name": "Tapan",
   "description": "Your personal AI assistant: reminders, tasks, notes, web search and memory of every conversation.",
   "lang": "en",
@@ -10,8 +10,8 @@
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
   "orientation": "any",
-  "background_color": "#050807",
-  "theme_color": "#050807",
+  "background_color": "#0c0f15",
+  "theme_color": "#0c0f15",
   "categories": ["productivity", "utilities"],
   "prefer_related_applications": false,
   "icons": [

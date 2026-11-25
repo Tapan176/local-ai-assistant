@@ -12,6 +12,7 @@ const integrationsJs = fs.readFileSync(ROOT + "settings-integrations.js", "utf8"
 const moneyJs = fs.readFileSync(ROOT + "money.js", "utf8");
 const moneySpendJs = fs.readFileSync(ROOT + "money-spend.js", "utf8");
 const kitJs = fs.readFileSync(ROOT + "panel-kit.js", "utf8");
+const themeJs = fs.readFileSync(ROOT + "theme.js", "utf8");
 const workJs = fs.readFileSync(ROOT + "work.js", "utf8");
 const growthJs = fs.readFileSync(ROOT + "growth.js", "utf8");
 
@@ -80,6 +81,7 @@ function boot({ storage = {}, coarse = false, routes: extra = {}, url, ua, stand
   const spoken = [];
   w.speechSynthesis = { cancel() {}, speak(u) { spoken.push(u.text); }, getVoices: () => [] };
   w.SpeechSynthesisUtterance = function (t) { this.text = t; };
+  w.eval(themeJs);
   w.eval(version ? appJs.replace(/__WEB_VERSION__/g, version) : appJs);
   w.eval(settingsJs);
   w.eval(integrationsJs);
@@ -368,17 +370,17 @@ const authed = (t, s = t.sockets[t.sockets.length - 1]) => { t.open(s); t.say(s,
   const side = t.$("side-panel");
   check("phone: a closed off-screen drawer is unreachable by keyboard / screen reader", side.hasAttribute("inert") && side.getAttribute("role") === "complementary");
   t.$("today-btn").focus(); t.$("today-btn").click(); await wait(30);
-  check("open drawer is a modal dialog", side.getAttribute("role") === "dialog" && side.getAttribute("aria-modal") === "true" && !side.hasAttribute("inert"));
-  check("everything behind the drawer is inert", t.w.document.querySelector(".topbar").hasAttribute("inert") && t.w.document.querySelector(".chat").hasAttribute("inert"));
-  check("focus moves to the close button", t.w.document.activeElement.id === "side-close");
+  check("an open section page is a labelled region, not a modal, and is reachable", side.getAttribute("role") === "region" && side.getAttribute("aria-labelledby") === "panel-title" && !side.hasAttribute("aria-modal") && !side.hasAttribute("inert"));
+  check("the chat and top bar behind it are inert, but the bottom bar is not (it is how you move around)", t.w.document.querySelector(".topbar").hasAttribute("inert") && t.w.document.querySelector(".chat").hasAttribute("inert") && !t.$("bottom-nav").hasAttribute("inert"));
+  check("focus moves to the page title, so a screen reader announces where you are", t.w.document.activeElement.id === "panel-title" && /Today/.test(t.w.document.activeElement.textContent));
   check("opening pushes a history entry so the Back button can close it", t.w.history.state && t.w.history.state.tapanPanel === true);
   const focusables = [...side.querySelectorAll('a[href], button:not([disabled]), textarea, input, [tabindex]:not([tabindex="-1"])')].filter((el) => !el.closest(".hidden"));
   focusables[focusables.length - 1].focus();
   let tab = t.key(side, { key: "Tab" });
-  check("Tab on the last control wraps to the first (focus trap)", tab.defaultPrevented && t.w.document.activeElement === focusables[0]);
+  check("Tab is not trapped inside the page: it can move on to the bottom bar", !tab.defaultPrevented);
   focusables[0].focus();
   tab = t.key(side, { key: "Tab", shiftKey: true });
-  check("Shift+Tab on the first control wraps to the last", tab.defaultPrevented && t.w.document.activeElement === focusables[focusables.length - 1]);
+  check("...and Shift+Tab can move back out", !tab.defaultPrevented);
   // tabs: arrow keys
   t.$("tab-today").focus();
   t.key(t.$("tab-today"), { key: "ArrowRight" });
@@ -1527,6 +1529,98 @@ const authed = (t, s = t.sockets[t.sockets.length - 1]) => { t.open(s); t.say(s,
   const bulkBox = m.t.$("panel-money").querySelector('[role="group"][aria-label^="Mark several EMIs"] .scroll-box');
   check("scroll: the 'mark several' list scrolls too, so its buttons stay in reach", !!bulkBox && bulkBox.getAttribute("aria-label") === "Unpaid EMIs of Car loan" && bulkBox.querySelectorAll("li").length === 21);
   check("scroll: the scrolling regions' accessible names do not collide with each other", new Set([...m.t.$("panel-money").querySelectorAll(".scroll-box")].map((u) => u.getAttribute("aria-label"))).size === 2);
+
+
+  // ═══════════════ New design: bottom navigation, More menu, themes ═══════════════
+  const navRoutes = () => m0Routes({ "GET /api/history": { messages: [] }, "GET /api/briefing": {}, "GET /api/expenses": () => moneySnap(), "GET /api/work": () => workData(), "GET /api/growth": () => growthData(), "GET /api/conversations": { conversations: [] } });
+  const dest = (t, d) => [...t.$("bottom-nav").querySelectorAll(".bnav-btn")].find((b) => b.dataset.dest === d);
+  const currentDest = (t) => [...t.$("bottom-nav").querySelectorAll(".bnav-btn")].filter((b) => b.getAttribute("aria-current") === "page").map((b) => b.dataset.dest).join(",");
+  let nv = boot({ routes: navRoutes(), drawer: true }); authed(nv); await wait(40);
+  check("nav: a 'Main' navigation landmark holds named destinations in a sensible order", nv.$("bottom-nav").tagName === "NAV" && nv.$("bottom-nav").getAttribute("aria-label") === "Main" && [...nv.$("bottom-nav").querySelectorAll(".bnav-btn")].map((b) => b.textContent.trim()).join(",") === "Chat,Today,Money,Work,Growth,History,Settings,More");
+  check("nav: on a phone the bar shows six (History and Settings sit in More); on a wide screen the rail shows them directly", [...nv.$("bottom-nav").querySelectorAll(".bnav-btn.only-wide")].map((b) => b.dataset.dest).join(",") === "history,settings");
+  check("nav: it starts on Chat, and says so for assistive tech (aria-current)", currentDest(nv) === "chat");
+  check("nav: the icons are decoration (hidden from screen readers); the visible word is the name", [...nv.$("bottom-nav").querySelectorAll("svg")].every((s) => s.getAttribute("aria-hidden") === "true"));
+  dest(nv, "money").click(); await wait(60);
+  check("nav: Money opens the Money page and marks it current", nv.$("app").dataset.panel === "open" && nv.$("tab-money").getAttribute("aria-selected") === "true" && currentDest(nv) === "money");
+  check("nav: the page has a visible title that matches, and focus lands on it", nv.$("panel-title").textContent === "Money" && nv.w.document.activeElement.id === "panel-title");
+  dest(nv, "money").click(); await wait(20);
+  check("nav: tapping the current destination keeps you there (it does not toggle the page away)", nv.$("app").dataset.panel === "open" && currentDest(nv) === "money");
+  dest(nv, "work").click(); await wait(60);
+  check("nav: moving between pages swaps the title and the current marker", nv.$("panel-title").textContent === "Work" && currentDest(nv) === "work" && !nv.$("panel-work").classList.contains("hidden"));
+  dest(nv, "growth").click(); await wait(60);
+  check("nav: Growth works the same way", nv.$("panel-title").textContent === "Growth" && currentDest(nv) === "growth");
+  dest(nv, "today").click(); await wait(60);
+  check("nav: Today works the same way", nv.$("panel-title").textContent === "Today" && currentDest(nv) === "today");
+  dest(nv, "chat").click(); await wait(40);
+  check("nav: Chat closes the page and goes back to the conversation", nv.$("app").dataset.panel === "closed" && currentDest(nv) === "chat");
+
+  // desktop: the same navigation is a rail beside the chat, and every page has its own button
+  let dk = boot({ routes: navRoutes() }); authed(dk); await wait(40);
+  check("rail: on desktop the current page is marked from the start (the side panel is always showing one)", currentDest(dk) === "today" && dk.$("panel-title").textContent === "Today");
+  dest(dk, "history").click(); await wait(60);
+  check("rail: History opens in the side panel and is marked current", dk.$("tab-history").getAttribute("aria-selected") === "true" && currentDest(dk) === "history" && dk.$("panel-title").textContent === "History");
+  dest(dk, "settings").click(); await wait(60);
+  check("rail: Settings likewise", dk.$("tab-settings").getAttribute("aria-selected") === "true" && currentDest(dk) === "settings");
+  dest(dk, "growth").click(); await wait(60);
+  check("rail: Growth likewise, and the panel's title follows", currentDest(dk) === "growth" && dk.$("panel-title").textContent === "Growth" && !dk.$("panel-growth").classList.contains("hidden"));
+  dk.$("tab-work").click(); await wait(60);
+  check("rail: changing page by any other route (here the tab) keeps the rail in step", currentDest(dk) === "work");
+
+  // More menu
+  dest(nv, "more").focus(); dest(nv, "more").click(); await wait(20);
+  const more = () => nv.$("more-sheet");
+  check("more: opens a labelled modal sheet, hides the page behind it from assistive tech, and focuses its first choice", !more().classList.contains("hidden") && more().getAttribute("role") === "dialog" && more().getAttribute("aria-modal") === "true" && nv.$("app").hasAttribute("inert") && nv.w.document.activeElement.id === "more-history");
+  check("more: it holds History, Settings and the appearance choice", /History/.test(more().textContent) && /Settings/.test(more().textContent) && [...more().querySelectorAll(".seg3 button")].map((b) => b.textContent).join(",") === "Auto,Light,Dark");
+  nv.w.document.dispatchEvent(new nv.w.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await wait(10);
+  check("more: Escape closes it and puts focus back on the More button", more().classList.contains("hidden") && !nv.$("app").hasAttribute("inert") && nv.w.document.activeElement === dest(nv, "more"));
+  dest(nv, "more").click(); await wait(10);
+  nv.$("more-history").click(); await wait(60);
+  check("more: History opens the History page, and More is the current destination (History is not in the bar)", more().classList.contains("hidden") && nv.$("tab-history").getAttribute("aria-selected") === "true" && nv.$("panel-title").textContent === "History" && currentDest(nv) === "more");
+  dest(nv, "more").click(); await wait(10);
+  nv.$("more-settings").click(); await wait(60);
+  check("more: Settings opens the Settings page and keeps More current", nv.$("panel-title").textContent === "Settings" && currentDest(nv) === "more");
+  dest(nv, "chat").click(); await wait(20);
+  dest(nv, "more").click(); await wait(10);
+  nv.$("more-close").click(); await wait(10);
+  check("more: the Close button closes it", more().classList.contains("hidden"));
+  check("more: Install and Lock only appear when they could do something", nv.$("more-lock").classList.contains("hidden"));
+  nv.w.localStorage.setItem("tapan.token", "tok"); nv.w.TapanHost.state.token = "tok"; dest(nv, "more").click(); await wait(10);
+  check("more: ...Lock appears once there is a token to forget", !nv.$("more-lock").classList.contains("hidden"));
+  nv.$("more-close").click(); await wait(10);
+  check("nav: every button in the bar and the menu has a name", [...nv.$("bottom-nav").querySelectorAll("button"), ...more().querySelectorAll("button")].every((b) => (b.textContent.trim() || b.getAttribute("aria-label"))));
+
+  // themes
+  let th = boot({ routes: navRoutes(), drawer: true }); authed(th); await wait(30);
+  const root = () => th.w.document.documentElement;
+  check("theme: with no choice it follows the device (no data-theme attribute) and the toggle says so", !root().hasAttribute("data-theme") && th.$("theme-btn").dataset.pref === "auto" && /automatic/.test(th.$("theme-btn").getAttribute("aria-label")));
+  th.$("theme-btn").click(); await wait(10);
+  check("theme: the first tap chooses Light, remembers it on this device, and updates the browser bar colour", root().getAttribute("data-theme") === "light" && th.w.localStorage.getItem("tapan.theme") === "light" && th.w.document.querySelector('meta[name="theme-color"]').getAttribute("content") === "#f3f5f9");
+  check("theme: ...the button's name says what is selected now", th.$("theme-btn").dataset.pref === "light" && /light/.test(th.$("theme-btn").getAttribute("aria-label")) && /Appearance: light/.test(th.$("toast").textContent));
+  th.$("theme-btn").click(); await wait(10);
+  check("theme: the second tap chooses Dark", root().getAttribute("data-theme") === "dark" && th.w.document.querySelector('meta[name="theme-color"]').getAttribute("content") === "#0c0f15");
+  th.$("theme-btn").click(); await wait(10);
+  check("theme: the third tap goes back to Automatic and forgets the choice", !root().hasAttribute("data-theme") && th.w.localStorage.getItem("tapan.theme") === null);
+  th = boot({ routes: navRoutes(), drawer: true, storage: { "tapan.theme": "light" } }); authed(th); await wait(30);
+  check("theme: a remembered choice is applied before anything is drawn", th.w.document.documentElement.getAttribute("data-theme") === "light" && th.$("theme-btn").dataset.pref === "light");
+  th = boot({ routes: navRoutes(), drawer: true, storage: { "tapan.theme": "bogus" } }); authed(th); await wait(30);
+  check("theme: a corrupted saved value is ignored, not trusted", !th.w.document.documentElement.hasAttribute("data-theme"));
+  dest(th, "more").click(); await wait(10);
+  [...th.$("more-sheet").querySelectorAll(".seg3 button")].find((b) => b.dataset.pref === "dark").click(); await wait(10);
+  check("theme: the More menu's Auto/Light/Dark choice applies, and shows which one is selected", th.w.document.documentElement.getAttribute("data-theme") === "dark" && [...th.$("more-sheet").querySelectorAll(".seg3 button")].filter((b) => b.getAttribute("aria-pressed") === "true").map((b) => b.dataset.pref).join(",") === "dark");
+  check("theme: ...and the top-bar toggle agrees", th.$("theme-btn").dataset.pref === "dark");
+  [...th.$("more-sheet").querySelectorAll(".seg3 button")].find((b) => b.dataset.pref === "auto").click(); await wait(10);
+  check("theme: choosing Auto in the menu clears the override", !th.w.document.documentElement.hasAttribute("data-theme"));
+
+  // what the design must not depend on
+  const cssText = fs.readFileSync(ROOT + "style.css", "utf8");
+  const rawHtml = fs.readFileSync(ROOT + "index.html", "utf8");
+  check("design: nothing is fetched from a font or 3D-library CDN any more (faster first load, nothing leaks to third parties)", !/fonts\.googleapis|fonts\.gstatic|three\.min\.js|Orbitron/.test(rawHtml) && !/Orbitron/.test(cssText));
+  check("design: the theme script loads synchronously in the head, before the stylesheet, so there is no flash of the wrong theme", /<script src="theme\.js"><\/script>\s*<link rel="stylesheet" href="style\.css">/.test(rawHtml));
+  check("design: both themes define every colour token, and 'auto' follows the device", ["--bg", "--surface", "--surface-2", "--text", "--muted", "--accent", "--on-accent", "--danger", "--good"].every((tok) => (cssText.match(new RegExp(`${tok}:`, "g")) || []).length >= 3) && /prefers-color-scheme: light/.test(cssText) && /:root\[data-theme="light"\]/.test(cssText));
+  check("design: the page declares both colour schemes so native controls match", /<meta name="color-scheme" content="dark light">/.test(rawHtml));
+  check("design: no colour is hard-coded to the old green any more", !/0, 255, 136|#00ff88|#00160b/i.test(cssText));
+  check("design: text on the accent colour always uses the theme's own foreground, never a fixed colour", !/background: var\(--accent\);\s*color: #/.test(cssText));
+  check("design: the new scripts are not using innerHTML-style injection", !/innerHTML|insertAdjacentHTML|outerHTML/.test(fs.readFileSync(ROOT + "theme.js", "utf8")));
 
   console.log(failures ? `\n${failures} FAILED` : "\nALL UI TESTS PASSED");
   process.exit(failures ? 1 : 0);

@@ -14,7 +14,7 @@
 const VERSION = "tapan-shell-v4";
 const RUNTIME = "tapan-cdn-v1";
 const SHELL = [
-    "index.html", "style.css", "app.js", "settings.js", "settings-integrations.js", "money.js", "money-spend.js", "panel-kit.js", "work.js", "growth.js", "manifest.webmanifest",
+    "index.html", "style.css", "app.js", "settings.js", "settings-integrations.js", "theme.js", "money.js", "money-spend.js", "panel-kit.js", "work.js", "growth.js", "manifest.webmanifest",
     "icon.svg", "icons/icon-192.png", "icons/icon-512.png", "icons/icon-maskable-512.png", "icons/badge-96.png",
 ];
 const CDN_HOSTS = ["cdnjs.cloudflare.com", "cdn.jsdelivr.net", "fonts.googleapis.com", "fonts.gstatic.com"];

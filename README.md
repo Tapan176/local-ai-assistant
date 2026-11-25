@@ -82,6 +82,16 @@ always-on instance (`plan: starter`) or wake the server shortly before reminders
 - **Telegram** (works on iPhone too): create a bot with @BotFather, paste its token in *Settings > Telegram*, tap the link to pair.
   Reminders arrive there with Snooze buttons, and you can chat with the assistant. Only the paired chat is answered.
 
+## Design
+
+- **Navigation**: on phones and tablets a bottom bar (Chat, Today, Money, Work, Growth, More) opens each section as a full-screen page;
+  *More* holds History, Settings, appearance, install and lock. On desktop a left rail lists every section next to the chat and the
+  side panel. The bar hides itself while the on-screen keyboard is up.
+- **Appearance**: Auto (follows your device), Light or Dark, from the top bar on desktop or the *More* menu on a phone. The choice is
+  remembered on that device and applied before the first paint, so there is no flash of the wrong colours.
+- **Fast and private to load**: no web font and no 3D library are fetched from a CDN any more; everything the page draws is its own.
+- Contrast, focus order and names are checked in both themes at phone, tablet and desktop sizes (axe in real Edge, no violations).
+
 ## Money: payments, EMIs, spending and subscriptions
 
 The *Money* tab tracks what you have to pay, what you spend and what renews, and whether your banks can cover it.
